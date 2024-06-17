@@ -39,6 +39,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 		requestURL = fmt.Sprintf("/openai/deployments/%s/%s", model_, task)
 		return relaycommon.GetFullRequestURL(info.BaseUrl, requestURL, info.ChannelType), nil
+	case common.ChannelTypeOpenAIMax: //groq_web
+		return relaycommon.GetFullRequestURL(info.BaseUrl, "/openai/v1/chat/completions", info.ChannelType), nil
 	case common.ChannelTypeMiniMax:
 		return minimax.GetRequestURL(info)
 	case common.ChannelTypeCustom:
@@ -54,6 +56,15 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, info *re
 	channel.SetupApiRequestHeader(info, c, req)
 	if info.ChannelType == common.ChannelTypeAzure {
 		req.Header.Set("api-key", info.ApiKey)
+		return nil
+	}
+	//groq_web
+	if info.ChannelType == common.ChannelTypeOpenAIMax {
+		GerData := initGerAccount(info.ApiKey)
+		GerBaseHeader(req)
+		req.Header.Set("authorization", "Bearer "+GerData["token"])
+		req.Header.Set("groq-app", "chat")
+		req.Header.Set("groq-organization", GerData["organization"])
 		return nil
 	}
 	if info.ChannelType == common.ChannelTypeOpenAI && "" != info.Organization {
