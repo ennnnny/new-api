@@ -75,8 +75,17 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, info *re
 	}
 	//notdiamond
 	if info.ChannelType == common.ChannelTypeOhMyGPT {
+		common.SysLog("#2")
 		GerData := InitNAccount(info.ApiKey)
 		GerBaseNHeader(req, GerData["nextAction"], GerData["token"])
+		for name, values := range req.Header {
+			for _, value := range values {
+				common.SysLog(name + ": " + value)
+			}
+		}
+		bodyBytes, _ := io.ReadAll(req.Body)
+		bodyString := string(bodyBytes)
+		common.SysLog("Body: " + bodyString)
 		return nil
 	}
 	if info.ChannelType == common.ChannelTypeOpenAI && "" != info.Organization {

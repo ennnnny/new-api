@@ -229,14 +229,19 @@ func InitNAccount(key string) map[string]string {
 }
 
 func GerBaseNHeader(c *http.Request, nextAction string, token string) {
-	c.Header.Set("accept", "*/*")
+	c.Header.Set("accept", "text/x-component")
 	c.Header.Set("accept-language", "zh-CN,zh;q=0.9")
 	c.Header.Set("next-action", nextAction)
 	c.Header.Set("origin", "https://chat.notdiamond.ai")
 	c.Header.Set("referer", "https://chat.notdiamond.ai/")
 	c.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 	c.Header.Set("content-type", "application/json")
-	c.Header.Set("cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
+	//c.Header.Set("cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
+	c.AddCookie(&http.Cookie{
+		Name:   "sb-spuckhogycrxcbomznwo-auth-token",
+		Value:  token,
+		Domain: "chat.notdiamond.ai",
+	})
 }
 
 type NotdiamondData struct {
@@ -251,11 +256,13 @@ type NotdiamondData struct {
 }
 
 func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+	common.SysLog("#3")
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	var respArr []string
 	for scanner.Scan() {
 		data := scanner.Text()
+		common.SysLog(data)
 		if len(data) < 1 {
 			continue
 		}
@@ -278,6 +285,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 		if len(tempData) > 0 {
 			newStr := strings.Replace(tempData, "$$", "$", -1)
+			common.SysLog(newStr)
 			respArr = append(respArr, newStr)
 		}
 	}
