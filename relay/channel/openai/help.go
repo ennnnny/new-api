@@ -1,15 +1,20 @@
 package openai
 
 import (
+	"bufio"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"one-api/common"
+	"one-api/dto"
+	relaycommon "one-api/relay/common"
+	"one-api/service"
 	"strings"
 	"time"
 )
@@ -206,4 +211,150 @@ func GerGetSessionToken(apiKey string) (GerAuthenticateResponse, error) {
 func GerGenerateRefreshToken(apiKey string) string {
 	prefix := "public-token-live-26a89f59-09f8-48be-91ff-ce70e6000cb5:" + apiKey
 	return base64.StdEncoding.EncodeToString([]byte(prefix))
+}
+
+func InitNAccount(key string) map[string]string {
+	nextAction, token := "", ""
+
+	splitStr := strings.Split(key, "#")
+	if len(splitStr) == 2 {
+		nextAction = splitStr[0]
+		token = splitStr[1]
+	}
+	data := map[string]string{
+		"nextAction": nextAction,
+		"token":      token,
+	}
+	return data
+}
+
+func GerBaseNHeader(c *http.Request, nextAction string, token string) {
+	c.Header.Set("accept", "*/*")
+	c.Header.Set("accept-language", "zh-CN,zh;q=0.9")
+	c.Header.Set("next-action", nextAction)
+	c.Header.Set("origin", "https://chat.notdiamond.ai")
+	c.Header.Set("referer", "https://chat.notdiamond.ai/")
+	c.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	c.Header.Set("content-type", "application/json")
+	c.Header.Set("cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
+}
+
+type NotdiamondData struct {
+	Curr   string        `json:"curr,omitempty"`
+	Next   string        `json:"next,omitempty"`
+	Diff   []interface{} `json:"diff,omitempty"`
+	Output struct {
+		Curr string `json:"curr,omitempty"`
+		Next string `json:"next,omitempty"`
+		Type string `json:"type,omitempty"`
+	} `json:"output,omitempty"`
+}
+
+func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	var respArr []string
+	for scanner.Scan() {
+		data := scanner.Text()
+		if len(data) < 1 {
+			continue
+		}
+		splitStr := strings.SplitN(data, ":", 2)
+		if len(splitStr) < 2 {
+			continue
+		}
+		var cData NotdiamondData
+		err := json.Unmarshal([]byte(splitStr[1]), &cData)
+		if err != nil {
+			continue
+		}
+		tempData := ""
+		if cData.Curr != "" {
+			tempData = cData.Curr
+		} else if len(cData.Diff) > 1 {
+			tempData = cData.Diff[1].(string)
+		} else if cData.Output.Curr != "" {
+			tempData = cData.Output.Curr
+		}
+		if len(tempData) > 0 {
+			newStr := strings.Replace(tempData, "$$", "$", -1)
+			respArr = append(respArr, newStr)
+		}
+	}
+	err := resp.Body.Close()
+	if err != nil {
+		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+	}
+	if len(respArr) < 1 {
+		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+	}
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+	createdTime := common.GetTimestamp()
+	completionTokens, _ := service.CountTokenText(strings.Join(respArr, ""), info.UpstreamModelName)
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      info.PromptTokens + completionTokens,
+	}
+	if info.IsStream {
+		dataChan := make(chan string)
+		stopChan := make(chan bool)
+		go func() {
+			for _, dataTemp := range respArr {
+				var choice dto.ChatCompletionsStreamResponseChoice
+				choice.Delta.SetContentString(dataTemp)
+				var responseTemp dto.ChatCompletionsStreamResponse
+				responseTemp.Object = "chat.completion.chunk"
+				responseTemp.Model = info.UpstreamModelName
+				responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+				responseTemp.Id = responseId
+				responseTemp.Created = createdTime
+				dataNew, err := json.Marshal(responseTemp)
+				if err != nil {
+					common.SysError("error marshalling stream response: " + err.Error())
+					stopChan <- true
+					return
+				}
+				dataChan <- string(dataNew)
+			}
+			stopChan <- true
+		}()
+		service.SetEventStreamHeaders(c)
+		c.Stream(func(w io.Writer) bool {
+			select {
+			case data := <-dataChan:
+				c.Render(-1, common.CustomEvent{Data: "data: " + data})
+				return true
+			case <-stopChan:
+				c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+				return false
+			}
+		})
+	} else {
+		content, _ := json.Marshal(strings.Join(respArr, ""))
+		choice := dto.OpenAITextResponseChoice{
+			Index: 0,
+			Message: dto.Message{
+				Role:    "assistant",
+				Content: content,
+			},
+			FinishReason: "stop",
+		}
+
+		fullTextResponse := dto.OpenAITextResponse{
+			Id:      responseId,
+			Object:  "chat.completion",
+			Created: createdTime,
+			Choices: []dto.OpenAITextResponseChoice{choice},
+			Usage:   usage,
+		}
+		jsonResponse, err := json.Marshal(fullTextResponse)
+		if err != nil {
+			return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+		}
+		c.Writer.Header().Set("Content-Type", "application/json")
+		c.Writer.WriteHeader(resp.StatusCode)
+		_, err = c.Writer.Write(jsonResponse)
+	}
+	return nil, &usage
 }

@@ -231,7 +231,7 @@ var ChannelBaseURLs = []string{
 	"http://localhost:11434",              // 4
 	"https://api.openai-sb.com",           // 5
 	"https://api.groq.com",                // 6
-	"https://api.ohmygpt.com",             // 7
+	"https://chat.notdiamond.ai",          // 7
 	"",                                    // 8
 	"https://api.caipacity.com",           // 9
 	"https://api.aiproxy.io",              // 10

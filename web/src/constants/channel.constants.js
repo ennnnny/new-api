@@ -116,6 +116,13 @@ export const CHANNEL_OPTIONS = [
     color: 'violet',
     label: 'groqWeb',
   },
+  {
+    key: 7,
+    text: 'notdiamond',
+    value: 7,
+    color: 'violet',
+    label: 'notdiamond',
+  },
   { key: 8, text: '自定义渠道', value: 8, color: 'pink', label: '自定义渠道' },
   {
     key: 22,

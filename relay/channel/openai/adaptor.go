@@ -45,6 +45,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return relaycommon.GetFullRequestURL(info.BaseUrl, requestURL, info.ChannelType), nil
 	case common.ChannelTypeOpenAIMax: //groq_web
 		return relaycommon.GetFullRequestURL(info.BaseUrl, "/openai/v1/chat/completions", info.ChannelType), nil
+	case common.ChannelTypeOhMyGPT: //notdiamond
+		return info.BaseUrl, nil
 	case common.ChannelTypeMiniMax:
 		return minimax.GetRequestURL(info)
 	case common.ChannelTypeCustom:
@@ -69,6 +71,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, info *re
 		req.Header.Set("authorization", "Bearer "+GerData["token"])
 		req.Header.Set("groq-app", "chat")
 		req.Header.Set("groq-organization", GerData["organization"])
+		return nil
+	}
+	//notdiamond
+	if info.ChannelType == common.ChannelTypeOhMyGPT {
+		GerData := InitNAccount(info.ApiKey)
+		GerBaseNHeader(req, GerData["nextAction"], GerData["token"])
 		return nil
 	}
 	if info.ChannelType == common.ChannelTypeOpenAI && "" != info.Organization {
@@ -155,6 +163,10 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case constant.RelayModeImagesGenerations:
 		err, usage = OpenaiTTSHandler(c, resp, info)
 	default:
+		if info.ChannelType == common.ChannelTypeOhMyGPT {
+			err, usage = NotdiamondHandler(c, resp, info)
+			return
+		}
 		if info.IsStream {
 			err, usage = OaiStreamHandler(c, resp, info)
 		} else {
