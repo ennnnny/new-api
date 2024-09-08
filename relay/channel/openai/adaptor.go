@@ -170,7 +170,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		err, usage = OpenaiTTSHandler(c, resp, info)
 	default:
 		if info.ChannelType == common.ChannelTypeOhMyGPT {
-			err, usage = NotdiamondHandler(c, resp, info)
+			if info.IsStream {
+				err, usage = NotdiamondStreamHandler(c, resp, info)
+			} else {
+				err, usage = NotdiamondHandler(c, resp, info)
+			}
 			return
 		}
 		if info.IsStream {
