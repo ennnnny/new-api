@@ -256,6 +256,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	var respArr []string
 	for scanner.Scan() {
 		data := scanner.Text()
+		common.SysLog(data)
 		if len(data) < 1 {
 			continue
 		}
