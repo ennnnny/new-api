@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/dto"
+	"one-api/model"
 	relaycommon "one-api/relay/common"
 	"one-api/service"
 	"strings"
@@ -229,19 +230,17 @@ func InitNAccount(key string) map[string]string {
 }
 
 func GerBaseNHeader(c *http.Request, nextAction string, token string) {
-	c.Header.Set("accept", "text/x-component")
-	c.Header.Set("accept-language", "zh-CN,zh;q=0.9")
-	c.Header.Set("next-action", nextAction)
-	c.Header.Set("origin", "https://chat.notdiamond.ai")
-	c.Header.Set("referer", "https://chat.notdiamond.ai/")
-	c.Header.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-	c.Header.Set("content-type", "application/json")
-	//c.Header.Set("cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
-	c.AddCookie(&http.Cookie{
-		Name:   "sb-spuckhogycrxcbomznwo-auth-token",
-		Value:  token,
-		Domain: "chat.notdiamond.ai",
-	})
+	c.Header.Add("accept", "text/x-component")
+	c.Header.Add("accept-language", "zh-CN,zh;q=0.6")
+	c.Header.Add("next-action", nextAction)
+	c.Header.Add("next-router-state-tree", "%5B%22%22%2C%7B%22children%22%3A%5B%22(chat)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D")
+	c.Header.Add("Origin", "https://chat.notdiamond.ai")
+	c.Header.Add("referer", "https://chat.notdiamond.ai/")
+	c.Header.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	c.Header.Add("Cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
+	c.Header.Add("content-type", "text/plain;charset=UTF-8")
+	c.Header.Add("Host", "chat.notdiamond.ai")
+	c.Header.Add("Connection", "keep-alive")
 }
 
 type NotdiamondData struct {
@@ -256,7 +255,26 @@ type NotdiamondData struct {
 }
 
 func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
-	common.SysLog("#3")
+	account := InitNAccount(info.ApiKey)
+	changeCookie := false
+	for _, cookie := range resp.Cookies() {
+		common.SysLog(cookie.Name + ": " + cookie.Value)
+		if cookie.Name == "sb-spuckhogycrxcbomznwo-auth-token" && len(cookie.Value) > 1 {
+			account["token"] = cookie.Value
+			changeCookie = true
+		}
+	}
+	if changeCookie {
+		newApiKey := account["nextAction"] + "#" + account["token"]
+		common.SysLog(newApiKey)
+		channel, err := model.GetChannelById(info.ChannelId, true)
+		if err != nil {
+		} else {
+			channel.Key = newApiKey
+			_ = channel.Save()
+		}
+	}
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	var respArr []string
@@ -285,7 +303,6 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 		if len(tempData) > 0 {
 			newStr := strings.Replace(tempData, "$$", "$", -1)
-			common.SysLog(newStr)
 			respArr = append(respArr, newStr)
 		}
 	}

@@ -1,7 +1,6 @@
 package channel
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -11,6 +10,7 @@ import (
 	"one-api/relay/common"
 	"one-api/relay/constant"
 	"one-api/service"
+	"strings"
 )
 
 func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Request) {
@@ -35,8 +35,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		bodyBytes, _ := io.ReadAll(requestBody)
 		bodyString := string(bodyBytes)
 		newBodyString := "[" + bodyString + "]"
-		requestBody = bytes.NewReader([]byte(newBodyString))
-		apicommon.SysLog(fullRequestURL)
+		requestBody = strings.NewReader(newBodyString)
 	}
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
