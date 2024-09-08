@@ -77,6 +77,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, info *re
 	if info.ChannelType == common.ChannelTypeOhMyGPT {
 		GerData := InitNAccount(info.ApiKey)
 		GerBaseNHeader(req, GerData["nextAction"], GerData["token"])
+		common.SysLog("notdiamond headers")
 		for name, values := range req.Header {
 			for _, value := range values {
 				common.SysLog(name + ": " + value)
