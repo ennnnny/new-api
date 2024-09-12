@@ -350,7 +350,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 	}
 	if changeCookie {
-		newApiKey := account["nextAction"] + "#" + account["token"]
+		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
 		common.SysLog("notdiamond-刷新token")
 		common.SysLog(newApiKey)
 		channel, err := model.GetChannelById(info.ChannelId, true)
@@ -447,7 +447,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 		}
 	}
 	if changeCookie {
-		newApiKey := account["nextAction"] + "#" + account["token"]
+		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
 		common.SysLog("notdiamond-刷新token")
 		common.SysLog(newApiKey)
 		channel, err := model.GetChannelById(info.ChannelId, true)
