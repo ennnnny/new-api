@@ -244,66 +244,59 @@ func ToNotdiamondBody(key string, requestBody io.Reader) string {
 	cModel := input["model"].(string)
 	delete(input, "model")
 	switch cModel {
-	case "gpt-4-turbo-2024-04-09":
+	case "gpt-4o":
 		input["provider"] = map[string]string{
-			"model":    "gpt-4-turbo-2024-04-09",
+			"model":    "gpt-4o",
 			"provider": "openai",
-		}
-	case "gemini-1.5-pro-exp-0801":
-	case "models/gemini-1.5-pro-exp-0801":
-		input["provider"] = map[string]string{
-			"model":    "models/gemini-1.5-pro-exp-0801",
-			"provider": "google",
-		}
-	case "Meta-Llama-3.1-70B-Instruct-Turbo":
-	case "meta.llama3-1-70b-instruct-v1:0":
-		input["provider"] = map[string]string{
-			"model":    "meta.llama3-1-70b-instruct-v1:0",
-			"provider": "togetherai",
-		}
-	case "Meta-Llama-3.1-405B-Instruct-Turbo":
-	case "meta.llama3-1-405b-instruct-v1:0":
-		input["provider"] = map[string]string{
-			"model":    "meta.llama3-1-405b-instruct-v1:0",
-			"provider": "togetherai",
-		}
-	case "llama-3.1-sonar-large-128k-online":
-		input["provider"] = map[string]string{
-			"model":    "llama-3.1-sonar-large-128k-online",
-			"provider": "togetherai",
-		}
-	case "gemini-1.5-pro-latest":
-	case "models/gemini-1.5-pro-latest":
-		input["provider"] = map[string]string{
-			"model":    "models/gemini-1.5-pro-latest",
-			"provider": "google",
-		}
-	case "claude-3-5-sonnet-20240620":
-	case "anthropic.claude-3-5-sonnet-20240620-v1:0":
-		input["provider"] = map[string]string{
-			"model":    "anthropic.claude-3-5-sonnet-20240620-v1:0",
-			"provider": "anthropic",
-		}
-	case "claude-3-haiku-20240307":
-	case "anthropic.claude-3-haiku-20240307-v1:0":
-		input["provider"] = map[string]string{
-			"model":    "anthropic.claude-3-haiku-20240307-v1:0",
-			"provider": "anthropic",
 		}
 	case "gpt-4o-mini":
 		input["provider"] = map[string]string{
 			"model":    "gpt-4o-mini",
 			"provider": "openai",
 		}
-	case "gpt-4o":
+	case "gpt-4-turbo-2024-04-09":
 		input["provider"] = map[string]string{
-			"model":    "gpt-4o",
+			"model":    "gpt-4-turbo-2024-04-09",
 			"provider": "openai",
 		}
-	case "mistral-large-2407":
-	case "mistral.mistral-large-2407-v1:0":
+	case "claude-3-5-sonnet-20240620":
 		input["provider"] = map[string]string{
-			"model":    "mistral.mistral-large-2407-v1:0",
+			"model":    "claude-3-5-sonnet-20240620",
+			"provider": "anthropic",
+		}
+	case "claude-3-haiku-20240307":
+		input["provider"] = map[string]string{
+			"model":    "claude-3-haiku-20240307",
+			"provider": "anthropic",
+		}
+	case "gemini-1.5-flash-latest":
+		input["provider"] = map[string]string{
+			"model":    "gemini-1.5-flash-latest",
+			"provider": "google",
+		}
+	case "gemini-1.5-pro-latest":
+		input["provider"] = map[string]string{
+			"model":    "gemini-1.5-pro-latest",
+			"provider": "google",
+		}
+	case "Meta-Llama-3.1-70B-Instruct-Turbo":
+		input["provider"] = map[string]string{
+			"model":    "Meta-Llama-3.1-70B-Instruct-Turbo",
+			"provider": "togetherai",
+		}
+	case "Meta-Llama-3.1-405B-Instruct-Turbo":
+		input["provider"] = map[string]string{
+			"model":    "Meta-Llama-3.1-405B-Instruct-Turbo",
+			"provider": "togetherai",
+		}
+	case "llama-3.1-sonar-large-128k-online":
+		input["provider"] = map[string]string{
+			"model":    "llama-3.1-sonar-large-128k-online",
+			"provider": "perplexity",
+		}
+	case "mistral-large-2407":
+		input["provider"] = map[string]string{
+			"model":    "mistral-large-2407",
 			"provider": "mistral",
 		}
 	}
