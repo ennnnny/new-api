@@ -6,11 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
-	apicommon "one-api/common"
 	"one-api/relay/common"
 	"one-api/relay/constant"
 	"one-api/service"
-	"strings"
 )
 
 func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Request) {
@@ -29,13 +27,6 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
-	}
-	//notdiamond
-	if info.ChannelType == apicommon.ChannelTypeOhMyGPT {
-		bodyBytes, _ := io.ReadAll(requestBody)
-		bodyString := string(bodyBytes)
-		newBodyString := "[" + bodyString + "]"
-		requestBody = strings.NewReader(newBodyString)
 	}
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {

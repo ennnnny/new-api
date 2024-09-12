@@ -154,6 +154,12 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if info.RelayMode == constant.RelayModeAudioTranscription || info.RelayMode == constant.RelayModeAudioTranslation {
 		return channel.DoFormRequest(a, c, info, requestBody)
 	} else {
+		//notdiamond
+		if info.ChannelType == common.ChannelTypeOhMyGPT {
+			newBodyString := ToNotdiamondBody(info.ApiKey, requestBody)
+			newBodyString = "[" + newBodyString + "]"
+			requestBody = strings.NewReader(newBodyString)
+		}
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
 }

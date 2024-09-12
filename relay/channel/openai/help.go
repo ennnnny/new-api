@@ -215,18 +215,103 @@ func GerGenerateRefreshToken(apiKey string) string {
 }
 
 func InitNAccount(key string) map[string]string {
-	nextAction, token := "", ""
+	userId, nextAction, token := "", "", ""
 
 	splitStr := strings.Split(key, "#")
-	if len(splitStr) == 2 {
-		nextAction = splitStr[0]
-		token = splitStr[1]
+	if len(splitStr) == 3 {
+		userId = splitStr[0]
+		nextAction = splitStr[1]
+		token = splitStr[2]
 	}
 	data := map[string]string{
+		"userId":     userId,
 		"nextAction": nextAction,
 		"token":      token,
 	}
 	return data
+}
+
+func ToNotdiamondBody(key string, requestBody io.Reader) string {
+	keyData := InitNAccount(key)
+	bodyBytes, _ := io.ReadAll(requestBody)
+	bodyString := string(bodyBytes)
+	var input map[string]interface{}
+	err := json.Unmarshal([]byte(bodyString), &input)
+	if err != nil {
+		return string(bodyBytes)
+	}
+	input["user_id"] = keyData["userId"]
+	cModel := input["model"].(string)
+	delete(input, "model")
+	switch cModel {
+	case "gpt-4-turbo-2024-04-09":
+		input["provider"] = map[string]string{
+			"cModel":   "gpt-4-turbo-2024-04-09",
+			"provider": "openai",
+		}
+	case "gemini-1.5-pro-exp-0801":
+	case "models/gemini-1.5-pro-exp-0801":
+		input["provider"] = map[string]string{
+			"cModel":   "models/gemini-1.5-pro-exp-0801",
+			"provider": "google",
+		}
+	case "Meta-Llama-3.1-70B-Instruct-Turbo":
+	case "meta.llama3-1-70b-instruct-v1:0":
+		input["provider"] = map[string]string{
+			"cModel":   "meta.llama3-1-70b-instruct-v1:0",
+			"provider": "togetherai",
+		}
+	case "Meta-Llama-3.1-405B-Instruct-Turbo":
+	case "meta.llama3-1-405b-instruct-v1:0":
+		input["provider"] = map[string]string{
+			"cModel":   "meta.llama3-1-405b-instruct-v1:0",
+			"provider": "togetherai",
+		}
+	case "llama-3.1-sonar-large-128k-online":
+		input["provider"] = map[string]string{
+			"cModel":   "llama-3.1-sonar-large-128k-online",
+			"provider": "togetherai",
+		}
+	case "gemini-1.5-pro-latest":
+	case "models/gemini-1.5-pro-latest":
+		input["provider"] = map[string]string{
+			"cModel":   "models/gemini-1.5-pro-latest",
+			"provider": "google",
+		}
+	case "claude-3-5-sonnet-20240620":
+	case "anthropic.claude-3-5-sonnet-20240620-v1:0":
+		input["provider"] = map[string]string{
+			"cModel":   "anthropic.claude-3-5-sonnet-20240620-v1:0",
+			"provider": "anthropic",
+		}
+	case "claude-3-haiku-20240307":
+	case "anthropic.claude-3-haiku-20240307-v1:0":
+		input["provider"] = map[string]string{
+			"cModel":   "anthropic.claude-3-haiku-20240307-v1:0",
+			"provider": "anthropic",
+		}
+	case "gpt-4o-mini":
+		input["provider"] = map[string]string{
+			"cModel":   "gpt-4o-mini",
+			"provider": "openai",
+		}
+	case "gpt-4o":
+		input["provider"] = map[string]string{
+			"cModel":   "gpt-4o",
+			"provider": "openai",
+		}
+	case "mistral-large-2407":
+	case "mistral.mistral-large-2407-v1:0":
+		input["provider"] = map[string]string{
+			"cModel":   "mistral.mistral-large-2407-v1:0",
+			"provider": "mistral",
+		}
+	}
+	outputJSON, err := json.Marshal(input)
+	if err != nil {
+		return string(bodyBytes)
+	}
+	return string(outputJSON)
 }
 
 func GerBaseNHeader(c *http.Request, nextAction string, token string) {
