@@ -158,6 +158,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		if info.ChannelType == common.ChannelTypeOhMyGPT {
 			newBodyString := ToNotdiamondBody(info.ApiKey, requestBody)
 			newBodyString = "[" + newBodyString + "]"
+			common.SysLog("notdiamond request body: " + newBodyString)
 			requestBody = strings.NewReader(newBodyString)
 		}
 		return channel.DoApiRequest(a, c, info, requestBody)
