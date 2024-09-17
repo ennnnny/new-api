@@ -17,6 +17,7 @@ import (
 	relaycommon "one-api/relay/common"
 	"one-api/service"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -214,19 +215,138 @@ func GerGenerateRefreshToken(apiKey string) string {
 	return base64.StdEncoding.EncodeToString([]byte(prefix))
 }
 
+type Cache struct {
+	mu    sync.RWMutex
+	items map[string]interface{}
+}
+
+func (c *Cache) HelpCacheGet(key string) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	item, found := c.items[key]
+	if found {
+		cacheTime := item.(map[string]interface{})["cacheTime"].(int64)
+		if cacheTime < time.Now().Unix() {
+			delete(c.items, key)
+			return nil, false
+		} else {
+			value := item.(map[string]interface{})["value"]
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func HelpNewCache() *Cache {
+	return &Cache{
+		items: make(map[string]interface{}),
+	}
+}
+
+var helpCache = HelpNewCache()
+
+func (c *Cache) HelpCacheSet(key string, value interface{}, expiredTime int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items[key] = map[string]interface{}{
+		"value":     value,
+		"cacheTime": time.Now().Unix() + expiredTime,
+	}
+}
+
 func InitNAccount(key string) map[string]string {
 	userId, nextAction, token := "", "", ""
 
+	mode := "token"
 	splitStr := strings.Split(key, "#")
 	if len(splitStr) == 3 {
-		userId = splitStr[0]
-		nextAction = splitStr[1]
-		token = splitStr[2]
+		temp := splitStr[2]
+		if strings.HasPrefix(temp, "base64") {
+			userId = splitStr[0]
+			nextAction = splitStr[1]
+			token = splitStr[2]
+		} else {
+			mode = "account"
+			nextAction = splitStr[0]
+			account := splitStr[1]
+			password := splitStr[2]
+			if common.RedisEnabled {
+				cacheUserId, err := common.RedisGet(fmt.Sprintf("notdiamondUserId:%s", nextAction))
+				if err == nil {
+					userId = cacheUserId
+				}
+				cacheToken, err := common.RedisGet(fmt.Sprintf("notdiamondToken:%s", nextAction))
+				if err == nil {
+					token = cacheToken
+				}
+			} else {
+				cacheUserId, found := helpCache.HelpCacheGet(fmt.Sprintf("notdiamondUserId:%s", nextAction))
+				if found {
+					userId = cacheUserId.(string)
+				}
+				cacheToken, found := helpCache.HelpCacheGet(fmt.Sprintf("notdiamondToken:%s", nextAction))
+				if found {
+					token = cacheToken.(string)
+				}
+			}
+			if userId == "" || token == "" {
+				//登录
+				client := http.Client{}
+
+				req, err := http.NewRequest("POST", "https://spuckhogycrxcbomznwo.supabase.co/auth/v1/token?grant_type=password", strings.NewReader(fmt.Sprintf(`{"email":"%s","password":"%s","gotrue_meta_security":{}}`, account, password)))
+				if err == nil {
+					req.Header.Set("content-type", "application/json")
+					storageApiKey := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNwdWNraG9neWNyeGNib216bndvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDcyNDYwMzksImV4cCI6MjAyMjgyMjAzOX0.tvlGT7NZY8bijMjNIu1WhAtPnSKuDeYhtveo4DRt6xg"
+					req.Header.Set("apikey", storageApiKey)
+					req.Header.Set("authorization", "Bearer "+storageApiKey)
+					req.Header.Set("origin", "https://chat.notdiamond.ai")
+					req.Header.Set("referer", "https://chat.notdiamond.ai/")
+					req.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+					req.Header.Set("x-client-info", "supabase-ssr/0.4.0")
+					req.Header.Set("x-supabase-api-version", "2024-01-01")
+
+					res, err := client.Do(req)
+					defer res.Body.Close()
+					if err == nil {
+						common.SysLog("notdiamond-登录成功")
+						newBodyByte, err := io.ReadAll(res.Body)
+						if err == nil {
+							var input map[string]interface{}
+							err := json.Unmarshal(newBodyByte, &input)
+							if err == nil {
+								token = "base64-" + base64.RawURLEncoding.EncodeToString(newBodyByte)
+								tempUserId, ok := input["user"].(map[string]interface{})["id"]
+								if ok {
+									userId = tempUserId.(string)
+								}
+							}
+						}
+					}
+				}
+
+				if userId != "" && token != "" {
+					if common.RedisEnabled {
+						err = common.RedisSet(fmt.Sprintf("notdiamondUserId:%s", nextAction), userId, 12*time.Hour)
+						if err != nil {
+							common.SysError("Redis set notdiamondUserId error: " + err.Error())
+						}
+						err = common.RedisSet(fmt.Sprintf("notdiamondToken:%s", nextAction), token, 12*time.Hour)
+						if err != nil {
+							common.SysError("Redis set notdiamondToken error: " + err.Error())
+						}
+					} else {
+						helpCache.HelpCacheSet(fmt.Sprintf("notdiamondUserId:%s", nextAction), userId, 12*60*60)
+						helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", nextAction), token, 12*60*60)
+					}
+				}
+			}
+		}
 	}
 	data := map[string]string{
 		"userId":     userId,
 		"nextAction": nextAction,
 		"token":      token,
+		"mode":       mode,
 	}
 	return data
 }
@@ -343,14 +463,26 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		}
 	}
 	if changeCookie {
-		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
 		common.SysLog("notdiamond-刷新token")
-		common.SysLog(newApiKey)
-		channel, err := model.GetChannelById(info.ChannelId, true)
-		if err != nil {
+		if account["mode"] == "token" {
+			newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
+			common.SysLog(newApiKey)
+			channel, err := model.GetChannelById(info.ChannelId, true)
+			if err != nil {
+			} else {
+				channel.Key = newApiKey
+				_ = channel.Save()
+			}
 		} else {
-			channel.Key = newApiKey
-			_ = channel.Save()
+			common.SysLog(account["token"])
+			if common.RedisEnabled {
+				err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
+				if err != nil {
+					common.SysError("Redis set notdiamondToken error: " + err.Error())
+				}
+			} else {
+				helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
+			}
 		}
 	}
 
@@ -440,14 +572,26 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 		}
 	}
 	if changeCookie {
-		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
 		common.SysLog("notdiamond-刷新token")
-		common.SysLog(newApiKey)
-		channel, err := model.GetChannelById(info.ChannelId, true)
-		if err != nil {
+		if account["mode"] == "token" {
+			newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
+			common.SysLog(newApiKey)
+			channel, err := model.GetChannelById(info.ChannelId, true)
+			if err != nil {
+			} else {
+				channel.Key = newApiKey
+				_ = channel.Save()
+			}
 		} else {
-			channel.Key = newApiKey
-			_ = channel.Save()
+			common.SysLog(account["token"])
+			if common.RedisEnabled {
+				err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
+				if err != nil {
+					common.SysError("Redis set notdiamondToken error: " + err.Error())
+				}
+			} else {
+				helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
+			}
 		}
 	}
 
