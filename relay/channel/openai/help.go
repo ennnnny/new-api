@@ -289,6 +289,9 @@ func InitNAccount(key string) map[string]string {
 					token = cacheToken.(string)
 				}
 			}
+			if strings.Contains(token, "base64-") {
+				token = ""
+			}
 			if userId == "" || token == "" {
 				//登录
 				client := http.Client{}
@@ -314,7 +317,8 @@ func InitNAccount(key string) map[string]string {
 							var input map[string]interface{}
 							err := json.Unmarshal(newBodyByte, &input)
 							if err == nil {
-								token = "base64-" + base64.RawURLEncoding.EncodeToString(newBodyByte)
+								token = input["access_token"].(string)
+								//base64.RawURLEncoding.EncodeToString(newBodyByte)
 								tempUserId, ok := input["user"].(map[string]interface{})["id"]
 								if ok {
 									userId = tempUserId.(string)
@@ -326,11 +330,11 @@ func InitNAccount(key string) map[string]string {
 
 				if userId != "" && token != "" {
 					if common.RedisEnabled {
-						err = common.RedisSet(fmt.Sprintf("notdiamondUserId:%s", nextAction), userId, 12*time.Hour)
+						err = common.RedisSet(fmt.Sprintf("notdiamondUserId:%s", nextAction), userId, 50*time.Minute)
 						if err != nil {
 							common.SysError("Redis set notdiamondUserId error: " + err.Error())
 						}
-						err = common.RedisSet(fmt.Sprintf("notdiamondToken:%s", nextAction), token, 12*time.Hour)
+						err = common.RedisSet(fmt.Sprintf("notdiamondToken:%s", nextAction), token, 50*time.Minute)
 						if err != nil {
 							common.SysError("Redis set notdiamondToken error: " + err.Error())
 						}
@@ -428,17 +432,18 @@ func ToNotdiamondBody(key string, requestBody io.Reader) string {
 }
 
 func GerBaseNHeader(c *http.Request, nextAction string, token string) {
-	c.Header.Add("accept", "text/x-component")
-	c.Header.Add("accept-language", "zh-CN,zh;q=0.6")
-	c.Header.Add("next-action", nextAction)
-	c.Header.Add("next-router-state-tree", "%5B%22%22%2C%7B%22children%22%3A%5B%22(chat)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D")
+	c.Header.Add("accept", "*/*")
+	//c.Header.Add("accept-language", "zh-CN,zh;q=0.6")
+	//c.Header.Add("next-action", nextAction)
+	//c.Header.Add("next-router-state-tree", "%5B%22%22%2C%7B%22children%22%3A%5B%22(chat)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D")
 	c.Header.Add("Origin", "https://chat.notdiamond.ai")
 	c.Header.Add("referer", "https://chat.notdiamond.ai/")
 	c.Header.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-	c.Header.Add("Cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
-	c.Header.Add("content-type", "text/plain;charset=UTF-8")
-	c.Header.Add("Host", "chat.notdiamond.ai")
-	c.Header.Add("Connection", "keep-alive")
+	//c.Header.Add("Cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
+	c.Header.Add("Authorization", "Bearer "+token)
+	//c.Header.Add("content-type", "application/json")
+	//c.Header.Add("Host", "chat.notdiamond.ai")
+	//c.Header.Add("Connection", "keep-alive")
 }
 
 type NotdiamondData struct {
@@ -492,30 +497,31 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	for scanner.Scan() {
 		data := scanner.Text()
 		common.SysLog(data)
-		if len(data) < 1 {
-			continue
-		}
-		splitStr := strings.SplitN(data, ":", 2)
-		if len(splitStr) < 2 {
-			continue
-		}
-		var cData NotdiamondData
-		err := json.Unmarshal([]byte(splitStr[1]), &cData)
-		if err != nil {
-			continue
-		}
-		tempData := ""
-		if cData.Curr != "" {
-			tempData = cData.Curr
-		} else if len(cData.Diff) > 1 {
-			tempData = cData.Diff[1].(string)
-		} else if cData.Output.Curr != "" {
-			tempData = cData.Output.Curr
-		}
-		if len(tempData) > 0 {
-			newStr := strings.Replace(tempData, "$$", "$", -1)
-			respArr = append(respArr, newStr)
-		}
+		respArr = append(respArr, data)
+		//if len(data) < 1 {
+		//	continue
+		//}
+		//splitStr := strings.SplitN(data, ":", 2)
+		//if len(splitStr) < 2 {
+		//	continue
+		//}
+		//var cData NotdiamondData
+		//err := json.Unmarshal([]byte(splitStr[1]), &cData)
+		//if err != nil {
+		//	continue
+		//}
+		//tempData := ""
+		//if cData.Curr != "" {
+		//	tempData = cData.Curr
+		//} else if len(cData.Diff) > 1 {
+		//	tempData = cData.Diff[1].(string)
+		//} else if cData.Output.Curr != "" {
+		//	tempData = cData.Output.Curr
+		//}
+		//if len(tempData) > 0 {
+		//	newStr := strings.Replace(tempData, "$$", "$", -1)
+		//	respArr = append(respArr, newStr)
+		//}
 	}
 	err := resp.Body.Close()
 	if err != nil {
@@ -605,46 +611,64 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 		for scanner.Scan() {
 			data := scanner.Text()
 			common.SysLog(data)
-			if len(data) < 1 {
-				continue
-			}
-			splitStr := strings.SplitN(data, ":", 2)
-			if len(splitStr) < 2 {
-				continue
-			}
-			var cData NotdiamondData
-			err := json.Unmarshal([]byte(splitStr[1]), &cData)
-			if err != nil {
-				continue
-			}
-			tempData := ""
-			if cData.Curr != "" {
-				tempData = cData.Curr
-			} else if len(cData.Diff) > 1 {
-				tempData = cData.Diff[1].(string)
-			} else if cData.Output.Curr != "" {
-				tempData = cData.Output.Curr
-			}
-			if len(tempData) > 0 {
-				newStr := strings.Replace(tempData, "$$", "$", -1)
-				respArr = append(respArr, newStr)
+			respArr = append(respArr, data)
 
-				var choice dto.ChatCompletionsStreamResponseChoice
-				choice.Delta.SetContentString(newStr)
-				var responseTemp dto.ChatCompletionsStreamResponse
-				responseTemp.Object = "chat.completion.chunk"
-				responseTemp.Model = info.UpstreamModelName
-				responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
-				responseTemp.Id = responseId
-				responseTemp.Created = common.GetTimestamp()
-				dataNew, err := json.Marshal(responseTemp)
-				if err != nil {
-					common.SysError("error marshalling stream response: " + err.Error())
-					stopChan <- true
-					return
-				}
-				dataChan <- string(dataNew)
+			var choice dto.ChatCompletionsStreamResponseChoice
+			choice.Delta.SetContentString(data)
+			var responseTemp dto.ChatCompletionsStreamResponse
+			responseTemp.Object = "chat.completion.chunk"
+			responseTemp.Model = info.UpstreamModelName
+			responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+			responseTemp.Id = responseId
+			responseTemp.Created = common.GetTimestamp()
+			dataNew, err := json.Marshal(responseTemp)
+			if err != nil {
+				common.SysError("error marshalling stream response: " + err.Error())
+				stopChan <- true
+				return
 			}
+			dataChan <- string(dataNew)
+
+			//if len(data) < 1 {
+			//	continue
+			//}
+			//splitStr := strings.SplitN(data, ":", 2)
+			//if len(splitStr) < 2 {
+			//	continue
+			//}
+			//var cData NotdiamondData
+			//err := json.Unmarshal([]byte(splitStr[1]), &cData)
+			//if err != nil {
+			//	continue
+			//}
+			//tempData := ""
+			//if cData.Curr != "" {
+			//	tempData = cData.Curr
+			//} else if len(cData.Diff) > 1 {
+			//	tempData = cData.Diff[1].(string)
+			//} else if cData.Output.Curr != "" {
+			//	tempData = cData.Output.Curr
+			//}
+			//if len(tempData) > 0 {
+			//	newStr := strings.Replace(tempData, "$$", "$", -1)
+			//	respArr = append(respArr, newStr)
+			//
+			//	var choice dto.ChatCompletionsStreamResponseChoice
+			//	choice.Delta.SetContentString(newStr)
+			//	var responseTemp dto.ChatCompletionsStreamResponse
+			//	responseTemp.Object = "chat.completion.chunk"
+			//	responseTemp.Model = info.UpstreamModelName
+			//	responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+			//	responseTemp.Id = responseId
+			//	responseTemp.Created = common.GetTimestamp()
+			//	dataNew, err := json.Marshal(responseTemp)
+			//	if err != nil {
+			//		common.SysError("error marshalling stream response: " + err.Error())
+			//		stopChan <- true
+			//		return
+			//	}
+			//	dataChan <- string(dataNew)
+			//}
 		}
 		stopChan <- true
 	}()

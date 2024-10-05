@@ -161,16 +161,16 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		return channel.DoFormRequest(a, c, info, requestBody)
 	} else {
 		//notdiamond
-		if info.ChannelType == common.ChannelTypeOhMyGPT {
-			//newBodyString := ToNotdiamondBody(info.ApiKey, requestBody)
-			//newBodyString = "[" + bodyString + "]"
-			bodyBytes, _ := io.ReadAll(requestBody)
-			bodyString := string(bodyBytes)
-			newBodyString := "[" + bodyString + "]"
-
-			common.SysLog("notdiamond request body: " + newBodyString)
-			requestBody = strings.NewReader(newBodyString)
-		}
+		//if info.ChannelType == common.ChannelTypeOhMyGPT {
+		//	//newBodyString := ToNotdiamondBody(info.ApiKey, requestBody)
+		//	//newBodyString = "[" + bodyString + "]"
+		//	bodyBytes, _ := io.ReadAll(requestBody)
+		//	bodyString := string(bodyBytes)
+		//	newBodyString := "[" + bodyString + "]"
+		//
+		//	common.SysLog("notdiamond request body: " + newBodyString)
+		//	requestBody = strings.NewReader(newBodyString)
+		//}
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
 }
