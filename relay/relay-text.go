@@ -176,7 +176,11 @@ func TextHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 	}
 
 	if resp != nil {
-		relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
+		//notdiamond
+		if relayInfo.ChannelType == common.ChannelTypeOhMyGPT {
+		} else {
+			relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
+		}
 		if resp.StatusCode != http.StatusOK {
 			returnPreConsumedQuota(c, relayInfo, userQuota, preConsumedQuota)
 			openaiErr := service.RelayErrorHandler(resp)
