@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/dto"
-	"one-api/model"
 	relaycommon "one-api/relay/common"
 	"one-api/service"
 	"strings"
@@ -458,44 +457,45 @@ type NotdiamondData struct {
 }
 
 func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
-	account := InitNAccount(info.ApiKey)
-	changeCookie := false
-	for _, cookie := range resp.Cookies() {
-		common.SysLog(cookie.Name + ": " + cookie.Value)
-		if cookie.Name == "sb-spuckhogycrxcbomznwo-auth-token" && len(cookie.Value) > 1 {
-			account["token"] = cookie.Value
-			changeCookie = true
-		}
-	}
-	if changeCookie {
-		common.SysLog("notdiamond-刷新token")
-		if account["mode"] == "token" {
-			newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
-			common.SysLog(newApiKey)
-			channel, err := model.GetChannelById(info.ChannelId, true)
-			if err != nil {
-			} else {
-				channel.Key = newApiKey
-				_ = channel.Save()
-			}
-		} else {
-			common.SysLog(account["token"])
-			if common.RedisEnabled {
-				err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
-				if err != nil {
-					common.SysError("Redis set notdiamondToken error: " + err.Error())
-				}
-			} else {
-				helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
-			}
-		}
-	}
+	//account := InitNAccount(info.ApiKey)
+	//changeCookie := false
+	//for _, cookie := range resp.Cookies() {
+	//	common.SysLog(cookie.Name + ": " + cookie.Value)
+	//	if cookie.Name == "sb-spuckhogycrxcbomznwo-auth-token" && len(cookie.Value) > 1 {
+	//		account["token"] = cookie.Value
+	//		changeCookie = true
+	//	}
+	//}
+	//if changeCookie {
+	//	common.SysLog("notdiamond-刷新token")
+	//	if account["mode"] == "token" {
+	//		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
+	//		common.SysLog(newApiKey)
+	//		channel, err := model.GetChannelById(info.ChannelId, true)
+	//		if err != nil {
+	//		} else {
+	//			channel.Key = newApiKey
+	//			_ = channel.Save()
+	//		}
+	//	} else {
+	//		common.SysLog(account["token"])
+	//		if common.RedisEnabled {
+	//			err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
+	//			if err != nil {
+	//				common.SysError("Redis set notdiamondToken error: " + err.Error())
+	//			}
+	//		} else {
+	//			helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
+	//		}
+	//	}
+	//}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	var respArr []string
 	for scanner.Scan() {
 		data := scanner.Text()
+		data += "\n"
 		common.SysLog(data)
 		respArr = append(respArr, data)
 		//if len(data) < 1 {
@@ -568,38 +568,38 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 }
 
 func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
-	account := InitNAccount(info.ApiKey)
-	changeCookie := false
-	for _, cookie := range resp.Cookies() {
-		common.SysLog(cookie.Name + ": " + cookie.Value)
-		if cookie.Name == "sb-spuckhogycrxcbomznwo-auth-token" && len(cookie.Value) > 1 {
-			account["token"] = cookie.Value
-			changeCookie = true
-		}
-	}
-	if changeCookie {
-		common.SysLog("notdiamond-刷新token")
-		if account["mode"] == "token" {
-			newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
-			common.SysLog(newApiKey)
-			channel, err := model.GetChannelById(info.ChannelId, true)
-			if err != nil {
-			} else {
-				channel.Key = newApiKey
-				_ = channel.Save()
-			}
-		} else {
-			common.SysLog(account["token"])
-			if common.RedisEnabled {
-				err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
-				if err != nil {
-					common.SysError("Redis set notdiamondToken error: " + err.Error())
-				}
-			} else {
-				helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
-			}
-		}
-	}
+	//account := InitNAccount(info.ApiKey)
+	//changeCookie := false
+	//for _, cookie := range resp.Cookies() {
+	//	common.SysLog(cookie.Name + ": " + cookie.Value)
+	//	if cookie.Name == "sb-spuckhogycrxcbomznwo-auth-token" && len(cookie.Value) > 1 {
+	//		account["token"] = cookie.Value
+	//		changeCookie = true
+	//	}
+	//}
+	//if changeCookie {
+	//	common.SysLog("notdiamond-刷新token")
+	//	if account["mode"] == "token" {
+	//		newApiKey := account["userId"] + "#" + account["nextAction"] + "#" + account["token"]
+	//		common.SysLog(newApiKey)
+	//		channel, err := model.GetChannelById(info.ChannelId, true)
+	//		if err != nil {
+	//		} else {
+	//			channel.Key = newApiKey
+	//			_ = channel.Save()
+	//		}
+	//	} else {
+	//		common.SysLog(account["token"])
+	//		if common.RedisEnabled {
+	//			err := common.RedisSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*time.Hour)
+	//			if err != nil {
+	//				common.SysError("Redis set notdiamondToken error: " + err.Error())
+	//			}
+	//		} else {
+	//			helpCache.HelpCacheSet(fmt.Sprintf("notdiamondToken:%s", account["nextAction"]), account["token"], 12*60*60)
+	//		}
+	//	}
+	//}
 
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	var respArr []string
@@ -610,6 +610,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	go func() {
 		for scanner.Scan() {
 			data := scanner.Text()
+			data += "\n"
 			common.SysLog(data)
 			respArr = append(respArr, data)
 
