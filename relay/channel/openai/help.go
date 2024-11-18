@@ -532,7 +532,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
-	completionTokens, _ := service.CountTokenText(strings.Join(respArr, ""), info.UpstreamModelName)
+	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
@@ -688,7 +688,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
 	}
-	completionTokens, _ := service.CountTokenText(strings.Join(respArr, ""), info.UpstreamModelName)
+	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
