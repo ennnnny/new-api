@@ -76,22 +76,22 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	//groq_web
 	if info.ChannelType == common.ChannelTypeOpenAIMax {
 		GerData := initGerAccount(info.ApiKey)
-		GerBaseHeader(req)
-		req.Header.Set("authorization", "Bearer "+GerData["token"])
-		req.Header.Set("groq-app", "chat")
-		req.Header.Set("groq-organization", GerData["organization"])
+		GerBaseHeader(header)
+		header.Set("authorization", "Bearer "+GerData["token"])
+		header.Set("groq-app", "chat")
+		header.Set("groq-organization", GerData["organization"])
 		return nil
 	}
 	//notdiamond
 	if info.ChannelType == common.ChannelTypeOhMyGPT {
 		GerData := InitNAccount(info.ApiKey)
-		GerBaseNHeader(req, GerData["nextAction"], GerData["token"])
+		GerBaseNHeader(header, GerData["nextAction"], GerData["token"])
 		common.SysLog("notdiamond headers")
-		for name, values := range req.Header {
-			for _, value := range values {
-				common.SysLog(name + ": " + value)
-			}
-		}
+		//for name, values := range header {
+		//	for _, value := range values {
+		//		common.SysLog(name + ": " + value)
+		//	}
+		//}
 		return nil
 	}
 	if info.ChannelType == common.ChannelTypeOpenAI && "" != info.Organization {

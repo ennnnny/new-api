@@ -123,19 +123,19 @@ func initGerAccount(key string) map[string]string {
 	return data
 }
 
-func GerBaseHeader(c *http.Request) {
-	c.Header.Set("accept", "*/*")
-	c.Header.Set("accept-language", "zh-CN,zh;q=0.9")
-	c.Header.Set("content-type", "application/json")
-	c.Header.Set("origin", "https://groq.com")
-	c.Header.Set("referer", "https://groq.com/")
-	c.Header.Set("sec-ch-ua", `"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"`)
-	c.Header.Set("sec-ch-ua-mobile", "?0")
-	c.Header.Set("sec-ch-ua-platform", `"Windows"`)
-	c.Header.Set("sec-fetch-dest", "empty")
-	c.Header.Set("sec-fetch-mode", "cors")
-	c.Header.Set("sec-fetch-site", "cross-site")
-	c.Header.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+func GerBaseHeader(c *http.Header) {
+	c.Set("accept", "*/*")
+	c.Set("accept-language", "zh-CN,zh;q=0.9")
+	c.Set("content-type", "application/json")
+	c.Set("origin", "https://groq.com")
+	c.Set("referer", "https://groq.com/")
+	c.Set("sec-ch-ua", `"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"`)
+	c.Set("sec-ch-ua-mobile", "?0")
+	c.Set("sec-ch-ua-platform", `"Windows"`)
+	c.Set("sec-fetch-dest", "empty")
+	c.Set("sec-fetch-mode", "cors")
+	c.Set("sec-fetch-site", "cross-site")
+	c.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
 }
 
 func GerOrganizationId(apiKey string) string {
@@ -145,7 +145,7 @@ func GerOrganizationId(apiKey string) string {
 	if err != nil {
 		return ""
 	}
-	GerBaseHeader(req)
+	GerBaseHeader(&req.Header)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	//log
@@ -188,7 +188,7 @@ func GerGetSessionToken(apiKey string) (GerAuthenticateResponse, error) {
 	if err != nil {
 		return GerAuthenticateResponse{}, errors.New("create request failed")
 	}
-	GerBaseHeader(req)
+	GerBaseHeader(&req.Header)
 	req.Header.Set("Authorization", "Basic "+authorization)
 	req.Header.Set("x-sdk-client", "eyJldmVudF9pZCI6ImV2ZW50LWlkLWQ4M2IwNTI4LTllNjMtNDkxYi05OGM5LWUyZmJmODY4MWRlZiIsImFwcF9zZXNzaW9uX2lkIjoiYXBwLXNlc3Npb24taWQtNjRlNGI4ZTItOWM2NS00MDFlLWIyMjUtYjk4MWYxNGRjMTRjIiwicGVyc2lzdGVudF9pZCI6InBlcnNpc3RlbnQtaWQtOTNlZWYwNWUtYWE0OS00OWJhLThhNjktYWVjZTA3ZTZiM2NmIiwiY2xpZW50X3NlbnRfYXQiOiIyMDI0LTA0LTI2VDExOjM4OjU1Ljk0NVoiLCJ0aW1lem9uZSI6IkFzaWEvU2hhbmdoYWkiLCJzdHl0Y2hfdXNlcl9pZCI6InVzZXItbGl2ZS1kZDM4ODRiYS01M2YyLTRjNjEtYTI5Yi02NzEwNmExMDMxNTciLCJzdHl0Y2hfc2Vzc2lvbl9pZCI6InNlc3Npb24tbGl2ZS01ZjQ5NDViZS1kNTIyLTQyZWEtYTEzNC01MWE4YzM2OTBkN2UiLCJhcHAiOnsiaWRlbnRpZmllciI6ImNvbnNvbGUuZ3JvcS5jb20ifSwic2RrIjp7ImlkZW50aWZpZXIiOiJTdHl0Y2guanMgSmF2YXNjcmlwdCBTREsiLCJ2ZXJzaW9uIjoiNC42LjAifX0=")
 	req.Header.Set("x-sdk-parent-host", "https://groq.com")
@@ -430,16 +430,16 @@ func ToNotdiamondBody(key string, requestBody io.Reader) string {
 	return string(outputJSON)
 }
 
-func GerBaseNHeader(c *http.Request, nextAction string, token string) {
-	c.Header.Add("accept", "*/*")
+func GerBaseNHeader(c *http.Header, nextAction string, token string) {
+	c.Add("accept", "*/*")
 	//c.Header.Add("accept-language", "zh-CN,zh;q=0.6")
 	//c.Header.Add("next-action", nextAction)
 	//c.Header.Add("next-router-state-tree", "%5B%22%22%2C%7B%22children%22%3A%5B%22(chat)%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2C%22%2F%22%2C%22refresh%22%5D%7D%5D%7D%2Cnull%2Cnull%2Ctrue%5D")
-	c.Header.Add("Origin", "https://chat.notdiamond.ai")
-	c.Header.Add("referer", "https://chat.notdiamond.ai/")
-	c.Header.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	c.Add("Origin", "https://chat.notdiamond.ai")
+	c.Add("referer", "https://chat.notdiamond.ai/")
+	c.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 	//c.Header.Add("Cookie", "sb-spuckhogycrxcbomznwo-auth-token="+token)
-	c.Header.Add("Authorization", "Bearer "+token)
+	c.Add("Authorization", "Bearer "+token)
 	//c.Header.Add("content-type", "application/json")
 	//c.Header.Add("Host", "chat.notdiamond.ai")
 	//c.Header.Add("Connection", "keep-alive")
