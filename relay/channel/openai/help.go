@@ -372,46 +372,51 @@ func ToNotdiamondBody(key string, requestBody io.Reader) string {
 			"model":    "gpt-4o",
 			"provider": "openai",
 		}
-	case "gpt-4o-mini":
-		input["provider"] = map[string]string{
-			"model":    "gpt-4o-mini",
-			"provider": "openai",
-		}
 	case "gpt-4-turbo-2024-04-09":
 		input["provider"] = map[string]string{
 			"model":    "gpt-4-turbo-2024-04-09",
 			"provider": "openai",
 		}
-	case "claude-3-5-sonnet-20240620":
+	case "gpt-4o-mini":
 		input["provider"] = map[string]string{
-			"model":    "claude-3-5-sonnet-20240620",
+			"model":    "gpt-4o-mini",
+			"provider": "openai",
+		}
+	case "chatgpt-4o-latest":
+		input["provider"] = map[string]string{
+			"model":    "chatgpt-4o-latest",
+			"provider": "openai",
+		}
+	case "claude-3-5-sonnet-20241022":
+		input["provider"] = map[string]string{
+			"model":    "anthropic.claude-3-5-sonnet-20241022-v2:0",
 			"provider": "anthropic",
 		}
-	case "claude-3-haiku-20240307":
+	case "claude-3-5-haiku-20241022":
 		input["provider"] = map[string]string{
-			"model":    "claude-3-haiku-20240307",
+			"model":    "anthropic.claude-3-5-haiku-20241022-v1:0",
 			"provider": "anthropic",
 		}
 	case "gemini-1.5-flash-latest":
 		input["provider"] = map[string]string{
-			"model":    "gemini-1.5-flash-latest",
+			"model":    "models/gemini-1.5-flash-latest",
 			"provider": "google",
 		}
 	case "gemini-1.5-pro-latest":
 		input["provider"] = map[string]string{
-			"model":    "gemini-1.5-pro-latest",
+			"model":    "models/gemini-1.5-pro-latest",
 			"provider": "google",
 		}
 	case "Meta-Llama-3.1-70B-Instruct-Turbo":
 		input["provider"] = map[string]string{
-			"model":    "Meta-Llama-3.1-70B-Instruct-Turbo",
+			"model":    "meta.llama3-1-70b-instruct-v1:0",
 			"provider": "togetherai",
 		}
-	case "Meta-Llama-3.1-405B-Instruct-Turbo":
-		input["provider"] = map[string]string{
-			"model":    "Meta-Llama-3.1-405B-Instruct-Turbo",
-			"provider": "togetherai",
-		}
+	//case "Meta-Llama-3.1-405B-Instruct-Turbo":
+	//	input["provider"] = map[string]string{
+	//		"model":    "Meta-Llama-3.1-405B-Instruct-Turbo",
+	//		"provider": "togetherai",
+	//	}
 	case "llama-3.1-sonar-large-128k-online":
 		input["provider"] = map[string]string{
 			"model":    "llama-3.1-sonar-large-128k-online",
@@ -419,7 +424,7 @@ func ToNotdiamondBody(key string, requestBody io.Reader) string {
 		}
 	case "mistral-large-2407":
 		input["provider"] = map[string]string{
-			"model":    "mistral-large-2407",
+			"model":    "mistral.mistral-large-2407-v1:0",
 			"provider": "mistral",
 		}
 	}
