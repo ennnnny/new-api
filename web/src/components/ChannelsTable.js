@@ -484,7 +484,7 @@ const ChannelsTable = () => {
       if (!enableTagMode) {
         channelDates.push(channels[i]);
       } else {
-        let tag = channels[i].tag;
+        let tag = channels[i].tag?channels[i].tag:"";
         // find from channelTags
         let tagIndex = channelTags[tag];
         let tagChannelDates = undefined;
@@ -768,7 +768,7 @@ const ChannelsTable = () => {
     }
   };
 
-  const searchChannels = async (searchKeyword, searchGroup, searchModel) => {
+  const searchChannels = async (searchKeyword, searchGroup, searchModel, enableTagMode) => {
     if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
       await loadChannels(0, pageSize, idSort, enableTagMode);
       setActivePage(1);
@@ -780,12 +780,7 @@ const ChannelsTable = () => {
     );
     const { success, message, data } = res.data;
     if (success) {
-      if (enableTagMode) {
-        setChannelFormat(data, enableTagMode);
-      } else {
-        setChannels(data.map(channel => ({...channel, key: '' + channel.id})));
-        setChannelCount(data.length);
-      }
+      setChannelFormat(data, enableTagMode);
       setActivePage(1);
     } else {
       showError(message);
@@ -987,7 +982,7 @@ const ChannelsTable = () => {
       />
       <Form
         onSubmit={() => {
-          searchChannels(searchKeyword, searchGroup, searchModel);
+          searchChannels(searchKeyword, searchGroup, searchModel, enableTagMode);
         }}
         labelPosition="left"
       >
@@ -1020,7 +1015,7 @@ const ChannelsTable = () => {
               initValue={null}
               onChange={(v) => {
                 setSearchGroup(v);
-                searchChannels(searchKeyword, v, searchModel);
+                searchChannels(searchKeyword, v, searchModel, enableTagMode);
               }}
             />
             <Button
