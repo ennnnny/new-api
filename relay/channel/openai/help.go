@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"one-api/common"
@@ -612,7 +614,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	scanner.Split(bufio.ScanLines)
 	dataChan := make(chan string)
 	stopChan := make(chan bool)
-	go func() {
+	gopool.Go(func() {
 		for scanner.Scan() {
 			data := scanner.Text()
 			data += "\n"
@@ -677,7 +679,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 			//}
 		}
 		stopChan <- true
-	}()
+	})
 	service.SetEventStreamHeaders(c)
 	c.Stream(func(w io.Writer) bool {
 		select {
@@ -702,3 +704,319 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 
 	return nil, &usage
 }
+
+// GetMerlin Start
+type OpenAIRequest struct {
+	Messages []Message `json:"messages"`
+	//Stream   bool      `json:"stream"`
+	Model string `json:"model"`
+}
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+type MerlinRequest struct {
+	Attachments []interface{} `json:"attachments"`
+	ChatId      string        `json:"chatId"`
+	Language    string        `json:"language"`
+	Message     struct {
+		Content  string `json:"content"`
+		Context  string `json:"context"`
+		ChildId  string `json:"childId"`
+		Id       string `json:"id"`
+		ParentId string `json:"parentId"`
+	} `json:"message"`
+	Metadata struct {
+		LargeContext  bool `json:"largeContext"`
+		MerlinMagic   bool `json:"merlinMagic"`
+		ProFinderMode bool `json:"proFinderMode"`
+		WebAccess     bool `json:"webAccess"`
+	} `json:"metadata"`
+	Mode  string `json:"mode"`
+	Model string `json:"model"`
+}
+type MerlinResponse struct {
+	Data struct {
+		Content string `json:"content"`
+	} `json:"data"`
+}
+type GetMerlinTokenResponse struct {
+	IdToken string `json:"idToken"`
+}
+
+func generateUUID() string {
+	return uuid.New().String()
+}
+
+func generateV1UUID() string {
+	uuidObj := uuid.Must(uuid.NewUUID())
+	return uuidObj.String()
+}
+
+func GetMerlinToken(key string) string {
+	var token string
+	keyMd5 := getMd5String(key)
+	if common.RedisEnabled {
+		var err error
+		token, err = common.RedisGet(fmt.Sprintf("GetMerlinToken:%s", keyMd5))
+		if err != nil {
+			token = ""
+		}
+	}
+	if token == "" {
+		//tokenReq := struct {
+		//	UUID string `json:"uuid"`
+		//}{
+		//	UUID: key,
+		//}
+		//
+		//tokenReqBody, _ := json.Marshal(tokenReq)
+		//common.SysLog(string(tokenReqBody))
+		//resp, err := http.Post(
+		//	"https://getmerlin-main-server.vercel.app/generate",
+		//	"application/json",
+		//	strings.NewReader(string(tokenReqBody)),
+		//)
+		//if err != nil {
+		//	token = ""
+		//}
+		//defer resp.Body.Close()
+
+		url := "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + key
+		method := "POST"
+		payload := strings.NewReader(`{"returnSecureToken": true}`)
+		client := &http.Client{}
+		req, err := http.NewRequest(method, url, payload)
+		if err != nil {
+			token = ""
+		}
+		req.Header.Add("accept", "*/*")
+		//req.Header.Add("accept-language", "zh-CN,zh;q=0.8")
+		req.Header.Add("origin", "https://www.getmerlin.in")
+		req.Header.Add("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+		req.Header.Add("content-type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			token = ""
+		}
+		defer resp.Body.Close()
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyString := string(bodyBytes)
+		common.SysLog("GetMerlinTokenBody：" + bodyString)
+		//var tokenResp GetMerlinTokenResponse
+		//if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		//	token = ""
+		//}
+		var input map[string]interface{}
+		err = json.Unmarshal(bodyBytes, &input)
+		if err == nil {
+			token = input["idToken"].(string)
+		}
+
+		if common.RedisEnabled {
+			if token != "" {
+				err := common.RedisSet(fmt.Sprintf("GetMerlinToken:%s", keyMd5), token, 10*time.Minute)
+				if err != nil {
+					common.SysError("Redis set token error: " + err.Error())
+				}
+			}
+		}
+	}
+
+	return token
+}
+
+func GetMerlinBaseHeader(c *http.Header, token string) {
+	c.Set("Content-Type", "application/json")
+	c.Set("Accept", "text/event-stream, text/event-stream")
+	c.Set("Authorization", "Bearer "+token)
+	c.Set("x-merlin-version", "web-merlin")
+	//c.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	c.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+	c.Set("host", "arcane.getmerlin.in")
+	c.Set("origin", "https://www.getmerlin.in")
+	c.Set("referer", "https://www.getmerlin.in/")
+}
+
+func ToGetMerlinReq(requestBody io.Reader) string {
+	var openAIReq OpenAIRequest
+	bodyBytes, _ := io.ReadAll(requestBody)
+	bodyString := string(bodyBytes)
+	if err := json.Unmarshal(bodyBytes, &openAIReq); err != nil {
+		return ""
+	}
+	var contextMessages []string
+	for i := 0; i < len(openAIReq.Messages)-1; i++ {
+		msg := openAIReq.Messages[i]
+		contextMessages = append(contextMessages, fmt.Sprintf("%s: %s", msg.Role, msg.Content))
+	}
+	context := strings.Join(contextMessages, "\n")
+	merlinReq := MerlinRequest{
+		Attachments: make([]interface{}, 0),
+		ChatId:      generateV1UUID(),
+		Language:    "AUTO",
+		Message: struct {
+			Content  string `json:"content"`
+			Context  string `json:"context"`
+			ChildId  string `json:"childId"`
+			Id       string `json:"id"`
+			ParentId string `json:"parentId"`
+		}{
+			Content:  openAIReq.Messages[len(openAIReq.Messages)-1].Content,
+			Context:  context,
+			ChildId:  generateUUID(),
+			Id:       generateUUID(),
+			ParentId: "root",
+		},
+		Mode:  "UNIFIED_CHAT",
+		Model: openAIReq.Model,
+		Metadata: struct {
+			LargeContext  bool `json:"largeContext"`
+			MerlinMagic   bool `json:"merlinMagic"`
+			ProFinderMode bool `json:"proFinderMode"`
+			WebAccess     bool `json:"webAccess"`
+		}{
+			LargeContext:  false,
+			MerlinMagic:   false,
+			ProFinderMode: false,
+			WebAccess:     false,
+		},
+	}
+	outputJSON, err := json.Marshal(merlinReq)
+	if err != nil {
+		return bodyString
+	}
+	return string(outputJSON)
+}
+
+func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+	var respArr []string
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	dataChan := make(chan string)
+	stopChan := make(chan bool)
+	gopool.Go(func() {
+		for scanner.Scan() {
+			info.SetFirstResponseTime()
+			data := scanner.Text()
+			dataLine := strings.TrimSpace(data)
+			common.SysLog(dataLine)
+			if strings.HasPrefix(dataLine, "data: ") {
+				var merlinResp MerlinResponse
+				_ = json.Unmarshal([]byte(strings.TrimPrefix(dataLine, "data: ")), &merlinResp)
+				if merlinResp.Data.Content != "" {
+					respArr = append(respArr, merlinResp.Data.Content)
+					var choice dto.ChatCompletionsStreamResponseChoice
+					choice.Delta.SetContentString(merlinResp.Data.Content)
+					var responseTemp dto.ChatCompletionsStreamResponse
+					responseTemp.Object = "chat.completion.chunk"
+					responseTemp.Model = info.UpstreamModelName
+					responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+					responseTemp.Id = responseId
+					responseTemp.Created = common.GetTimestamp()
+					dataNew, err := json.Marshal(responseTemp)
+					if err != nil {
+						common.SysError("error marshalling stream response: " + err.Error())
+						stopChan <- true
+						return
+					}
+					dataChan <- string(dataNew)
+				}
+			}
+		}
+		stopChan <- true
+	})
+	service.SetEventStreamHeaders(c)
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case data := <-dataChan:
+			c.Render(-1, common.CustomEvent{Data: "data: " + data})
+			return true
+		case <-stopChan:
+			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+			return false
+		}
+	})
+	err := resp.Body.Close()
+	if err != nil {
+		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+	}
+	allContent := strings.Join(respArr, "")
+	if allContent == "" {
+		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+	}
+	completionTokens, _ := service.CountTextToken(allContent, info.UpstreamModelName)
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      info.PromptTokens + completionTokens,
+	}
+
+	return nil, &usage
+}
+
+func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	var respArr []string
+	for scanner.Scan() {
+		info.SetFirstResponseTime()
+		data := scanner.Text()
+		dataLine := strings.TrimSpace(data)
+		common.SysLog(dataLine)
+		if strings.HasPrefix(dataLine, "data: ") {
+			var merlinResp MerlinResponse
+			_ = json.Unmarshal([]byte(strings.TrimPrefix(dataLine, "data: ")), &merlinResp)
+			if merlinResp.Data.Content != "" {
+				respArr = append(respArr, merlinResp.Data.Content)
+			}
+		}
+	}
+	err := resp.Body.Close()
+	if err != nil {
+		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+	}
+	if len(respArr) < 1 {
+		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+	}
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+	createdTime := common.GetTimestamp()
+	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      info.PromptTokens + completionTokens,
+	}
+
+	content, _ := json.Marshal(strings.Join(respArr, ""))
+	choice := dto.OpenAITextResponseChoice{
+		Index: 0,
+		Message: dto.Message{
+			Role:    "assistant",
+			Content: content,
+		},
+		FinishReason: "stop",
+	}
+
+	fullTextResponse := dto.OpenAITextResponse{
+		Id:      responseId,
+		Object:  "chat.completion",
+		Created: createdTime,
+		Choices: []dto.OpenAITextResponseChoice{choice},
+		Usage:   usage,
+	}
+	jsonResponse, err := json.Marshal(fullTextResponse)
+	if err != nil {
+		return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+	}
+	c.Writer.Header().Set("Content-Type", "application/json")
+	c.Writer.WriteHeader(resp.StatusCode)
+	_, err = c.Writer.Write(jsonResponse)
+
+	return nil, &usage
+}
+
+//GetMerlin End

@@ -65,6 +65,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return relaycommon.GetFullRequestURL(info.BaseUrl, "/openai/v1/chat/completions", info.ChannelType), nil
 	case common.ChannelTypeOhMyGPT: //notdiamond
 		return info.BaseUrl, nil
+	case common.ChannelTypeAILS: //GetMerlin
+		return "https://arcane.getmerlin.in/v1/thread/unified", nil
 	case common.ChannelTypeMiniMax:
 		return minimax.GetRequestURL(info)
 	case common.ChannelTypeCustom:
@@ -95,12 +97,19 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 	if info.ChannelType == common.ChannelTypeOhMyGPT {
 		GerData := InitNAccount(info.ApiKey)
 		GerBaseNHeader(header, GerData["nextAction"], GerData["token"])
-		common.SysLog("notdiamond headers")
+		//common.SysLog("notdiamond headers")
 		//for name, values := range header {
 		//	for _, value := range values {
 		//		common.SysLog(name + ": " + value)
 		//	}
 		//}
+		return nil
+	}
+	//GetMerlin
+	if info.ChannelType == common.ChannelTypeAILS {
+		GetMerlinToken := GetMerlinToken(info.ApiKey)
+		common.SysLog("GetMerlinToken: " + GetMerlinToken)
+		GetMerlinBaseHeader(header, GetMerlinToken)
 		return nil
 	}
 	if info.ChannelType == common.ChannelTypeOpenAI && "" != info.Organization {
@@ -244,6 +253,14 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		//	common.SysLog("notdiamond request body: " + newBodyString)
 		//	requestBody = strings.NewReader(newBodyString)
 		//}
+
+		//GetMerlin
+		if info.ChannelType == common.ChannelTypeAILS {
+			newBodyString := ToGetMerlinReq(requestBody)
+			//common.SysLog("GetMerlin request body: " + newBodyString)
+			requestBody = strings.NewReader(newBodyString)
+		}
+
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
 }
@@ -266,6 +283,14 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 				err, usage = NotdiamondStreamHandler(c, resp, info)
 			} else {
 				err, usage = NotdiamondHandler(c, resp, info)
+			}
+			return
+		}
+		if info.ChannelType == common.ChannelTypeAILS {
+			if info.IsStream {
+				err, usage = GetMerlinStreamHandler(c, resp, info)
+			} else {
+				err, usage = GetMerlinHandler(c, resp, info)
 			}
 			return
 		}

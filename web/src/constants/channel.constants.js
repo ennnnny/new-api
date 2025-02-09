@@ -125,6 +125,13 @@ export const CHANNEL_OPTIONS = [
     color: 'violet',
     label: 'notdiamond',
   },
+  {
+    key: 9,
+    text: 'GetMerlin',
+    value: 9,
+    color: 'violet',
+    label: 'GetMerlin',
+  },
   { key: 8, text: '自定义渠道', value: 8, color: 'pink', label: '自定义渠道' },
   {
     key: 22,
