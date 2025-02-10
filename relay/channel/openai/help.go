@@ -754,6 +754,18 @@ func generateV1UUID() string {
 }
 
 func GetMerlinToken(key string) string {
+	var apiKey, uid string
+	if strings.Contains(key, "#") {
+		splitStr := strings.Split(key, "#")
+		if len(splitStr) == 2 {
+			apiKey = splitStr[0]
+			uid = splitStr[1]
+		}
+	} else {
+		apiKey = key
+		uid = "4e75acce-a57e-4eda-a5c7-931d9f461fb8"
+	}
+
 	var token string
 	keyMd5 := getMd5String(key)
 	if common.RedisEnabled {
@@ -764,25 +776,29 @@ func GetMerlinToken(key string) string {
 		}
 	}
 	if token == "" {
-		//tokenReq := struct {
-		//	UUID string `json:"uuid"`
-		//}{
-		//	UUID: key,
-		//}
-		//
-		//tokenReqBody, _ := json.Marshal(tokenReq)
-		//common.SysLog(string(tokenReqBody))
-		//resp, err := http.Post(
-		//	"https://getmerlin-main-server.vercel.app/generate",
-		//	"application/json",
-		//	strings.NewReader(string(tokenReqBody)),
-		//)
-		//if err != nil {
-		//	token = ""
-		//}
-		//defer resp.Body.Close()
-
-		url := "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + key
+		tokenReq := struct {
+			UUID string `json:"uuid"`
+		}{
+			UUID: uid,
+		}
+		tokenReqBody, _ := json.Marshal(tokenReq)
+		common.SysLog(string(tokenReqBody))
+		resp, err := http.Post(
+			"https://getmerlin-main-server.vercel.app/generate",
+			"application/json",
+			strings.NewReader(string(tokenReqBody)),
+		)
+		defer resp.Body.Close()
+		if err == nil {
+			var tokenResp GetMerlinTokenResponse
+			err = json.NewDecoder(resp.Body).Decode(&tokenResp)
+			if err == nil {
+				token = tokenResp.IdToken
+			}
+		}
+	}
+	if token == "" {
+		url := "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + apiKey
 		method := "POST"
 		payload := strings.NewReader(`{"returnSecureToken": true}`)
 		client := &http.Client{}
@@ -805,23 +821,17 @@ func GetMerlinToken(key string) string {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		bodyString := string(bodyBytes)
 		common.SysLog("GetMerlinTokenBody：" + bodyString)
-		//var tokenResp GetMerlinTokenResponse
-		//if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		//	token = ""
-		//}
+
 		var input map[string]interface{}
 		err = json.Unmarshal(bodyBytes, &input)
 		if err == nil {
 			token = input["idToken"].(string)
 		}
-
-		if common.RedisEnabled {
-			if token != "" {
-				err := common.RedisSet(fmt.Sprintf("GetMerlinToken:%s", keyMd5), token, 10*time.Minute)
-				if err != nil {
-					common.SysError("Redis set token error: " + err.Error())
-				}
-			}
+	}
+	if token != "" && common.RedisEnabled {
+		err := common.RedisSet(fmt.Sprintf("GetMerlinToken:%s", keyMd5), token, 3*time.Minute)
+		if err != nil {
+			common.SysError("Redis set token error: " + err.Error())
 		}
 	}
 
