@@ -16,6 +16,7 @@ import (
 	"one-api/common"
 	"one-api/dto"
 	relaycommon "one-api/relay/common"
+	"one-api/relay/helper"
 	"one-api/service"
 	"strings"
 	"sync"
@@ -680,7 +681,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 		}
 		stopChan <- true
 	})
-	service.SetEventStreamHeaders(c)
+	helper.SetEventStreamHeaders(c)
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case data := <-dataChan:
@@ -939,7 +940,7 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 		}
 		stopChan <- true
 	})
-	service.SetEventStreamHeaders(c)
+	helper.SetEventStreamHeaders(c)
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case data := <-dataChan:

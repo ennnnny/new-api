@@ -94,22 +94,22 @@ export const CHANNEL_OPTIONS = [
   { value: 40, color: 'purple', label: 'SiliconCloud' },
   { value: 42, color: 'blue', label: 'Mistral AI' },
   { value: 8, color: 'pink', label: '自定义渠道' },
-    {
-        value: 6,
-        color: 'violet',
-        label: 'groqWeb',
-    },
-    {
-        value: 7,
-        color: 'violet',
-        label: 'notdiamond',
-    },
-    {
-        value: 9,
-        color: 'violet',
-        label: 'GetMerlin',
-    },
-    {
+  {
+    value: 6,
+    color: 'violet',
+    label: 'groqWeb',
+  },
+  {
+    value: 7,
+    color: 'violet',
+    label: 'notdiamond',
+  },
+  {
+    value: 9,
+    color: 'violet',
+    label: 'GetMerlin',
+  },
+  {
     value: 22,
     color: 'blue',
     label: '知识库：FastGPT'
