@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"one-api/common"
 	"one-api/dto"
+	"one-api/relay/helper"
 	"one-api/service"
 	"strings"
 )
@@ -25,9 +26,12 @@ func requestOpenAI2Ali(request dto.GeneralOpenAIRequest) *dto.GeneralOpenAIReque
 	return &request
 }
 
-func embeddingRequestOpenAI2Ali(request dto.GeneralOpenAIRequest) *AliEmbeddingRequest {
+func embeddingRequestOpenAI2Ali(request dto.EmbeddingRequest) *AliEmbeddingRequest {
+	if request.Model == "" {
+		request.Model = "text-embedding-v1"
+	}
 	return &AliEmbeddingRequest{
-		Model: "text-embedding-v1",
+		Model: request.Model,
 		Input: struct {
 			Texts []string `json:"texts"`
 		}{
@@ -150,7 +154,7 @@ func aliStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWith
 		}
 		stopChan <- true
 	}()
-	service.SetEventStreamHeaders(c)
+	helper.SetEventStreamHeaders(c)
 	lastResponseText := ""
 	c.Stream(func(w io.Writer) bool {
 		select {

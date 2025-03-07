@@ -14,6 +14,7 @@ import (
 	"one-api/dto"
 	"one-api/relay/channel"
 	"one-api/relay/channel/ai360"
+	"one-api/relay/channel/jina"
 	"one-api/relay/channel/lingyiwanwu"
 	"one-api/relay/channel/minimax"
 	"one-api/relay/channel/moonshot"
@@ -153,7 +154,7 @@ func (a *Adaptor) ConvertRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = 0
 		}
-		if strings.HasPrefix(request.Model, "o3") {
+		if strings.HasPrefix(request.Model, "o3") || strings.HasPrefix(request.Model, "o1") {
 			request.Temperature = nil
 		}
 		if strings.HasSuffix(request.Model, "-high") {
@@ -180,7 +181,11 @@ func (a *Adaptor) ConvertRequest(c *gin.Context, info *relaycommon.RelayInfo, re
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
-	return nil, errors.New("not implemented")
+	return request, nil
+}
+
+func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
+	return request, nil
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -277,6 +282,8 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		err, usage = OpenaiSTTHandler(c, resp, info, a.ResponseFormat)
 	case constant.RelayModeImagesGenerations:
 		err, usage = OpenaiTTSHandler(c, resp, info)
+	case constant.RelayModeRerank:
+		err, usage = jina.JinaRerankHandler(c, resp)
 	default:
 		if info.ChannelType == common.ChannelTypeOhMyGPT {
 			if info.IsStream {
