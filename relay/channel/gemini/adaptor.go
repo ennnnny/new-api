@@ -12,7 +12,6 @@ import (
 	relaycommon "one-api/relay/common"
 	"one-api/service"
 	"one-api/setting/model_setting"
-
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -70,6 +69,16 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+
+	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
+		// suffix -thinking and -nothinking
+		if strings.HasSuffix(info.OriginModelName, "-thinking") {
+			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
+		} else if strings.HasSuffix(info.OriginModelName, "-nothinking") {
+			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
+		}
+	}
+
 	version := model_setting.GetGeminiVersionSetting(info.UpstreamModelName)
 
 	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
@@ -99,11 +108,13 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	ai, err := CovertGemini2OpenAI(*request, info)
+
+	geminiRequest, err := CovertGemini2OpenAI(*request, info)
 	if err != nil {
 		return nil, err
 	}
-	return ai, nil
+
+	return geminiRequest, nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
@@ -144,6 +155,11 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 	return geminiRequest, nil
 }
 
+func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	// TODO implement me
+	return nil, errors.New("not implemented")
+}
+
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
@@ -165,6 +181,18 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	} else {
 		err, usage = GeminiChatHandler(c, resp, info)
 	}
+
+	//if usage.(*dto.Usage).CompletionTokenDetails.ReasoningTokens > 100 {
+	//	// 没有请求-thinking的情况下，产生思考token，则按照思考模型计费
+	//	if !strings.HasSuffix(info.OriginModelName, "-thinking") &&
+	//		!strings.HasSuffix(info.OriginModelName, "-nothinking") {
+	//		thinkingModelName := info.OriginModelName + "-thinking"
+	//		if operation_setting.SelfUseModeEnabled || helper.ContainPriceOrRatio(thinkingModelName) {
+	//			info.OriginModelName = thinkingModelName
+	//		}
+	//	}
+	//}
+
 	return
 }
 

@@ -1,10 +1,11 @@
 package router
 
 import (
-	"github.com/gin-gonic/gin"
 	"one-api/controller"
 	"one-api/middleware"
 	"one-api/relay"
+
+	"github.com/gin-gonic/gin"
 )
 
 func SetRelayRouter(router *gin.Engine) {
@@ -40,13 +41,14 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/chat/completions", controller.Relay)
 		httpRouter.POST("/edits", controller.Relay)
 		httpRouter.POST("/images/generations", controller.Relay)
-		httpRouter.POST("/images/edits", controller.RelayNotImplemented)
+		httpRouter.POST("/images/edits", controller.Relay)
 		httpRouter.POST("/images/variations", controller.RelayNotImplemented)
 		httpRouter.POST("/embeddings", controller.Relay)
 		httpRouter.POST("/engines/:model/embeddings", controller.Relay)
 		httpRouter.POST("/audio/transcriptions", controller.Relay)
 		httpRouter.POST("/audio/translations", controller.Relay)
 		httpRouter.POST("/audio/speech", controller.Relay)
+		httpRouter.POST("/responses", controller.Relay)
 		httpRouter.GET("/files", controller.RelayNotImplemented)
 		httpRouter.POST("/files", controller.RelayNotImplemented)
 		httpRouter.DELETE("/files/:id", controller.RelayNotImplemented)

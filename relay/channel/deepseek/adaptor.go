@@ -3,7 +3,6 @@ package deepseek
 import (
 	"errors"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"one-api/dto"
@@ -11,6 +10,9 @@ import (
 	"one-api/relay/channel/openai"
 	relaycommon "one-api/relay/common"
 	"one-api/relay/constant"
+	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Adaptor struct {
@@ -36,9 +38,13 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	fimBaseUrl := info.BaseUrl
+	if !strings.HasSuffix(info.BaseUrl, "/beta") {
+		fimBaseUrl += "/beta"
+	}
 	switch info.RelayMode {
 	case constant.RelayModeCompletions:
-		return fmt.Sprintf("%s/beta/completions", info.BaseUrl), nil
+		return fmt.Sprintf("%s/completions", fimBaseUrl), nil
 	default:
 		return fmt.Sprintf("%s/v1/chat/completions", info.BaseUrl), nil
 	}
@@ -63,6 +69,11 @@ func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dt
 
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
 	//TODO implement me
+	return nil, errors.New("not implemented")
+}
+
+func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	// TODO implement me
 	return nil, errors.New("not implemented")
 }
 
