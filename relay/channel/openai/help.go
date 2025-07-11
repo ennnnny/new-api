@@ -540,7 +540,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
-	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
+	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
@@ -696,7 +696,7 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
 	}
-	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
+	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
@@ -959,7 +959,7 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 	if allContent == "" {
 		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
 	}
-	completionTokens, _ := service.CountTextToken(allContent, info.UpstreamModelName)
+	completionTokens := service.CountTextToken(allContent, info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
@@ -995,7 +995,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
-	completionTokens, _ := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
+	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
 		PromptTokens:     info.PromptTokens,
 		CompletionTokens: completionTokens,
