@@ -221,7 +221,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		//notdiamond
-		if relayInfo.ChannelType == common.ChannelTypeOhMyGPT {
+		if relayInfo.ChannelType == constant.ChannelTypeOhMyGPT {
 		} else {
 			relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		}
