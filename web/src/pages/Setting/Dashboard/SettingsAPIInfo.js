@@ -9,7 +9,8 @@ import {
   Divider,
   Avatar,
   Modal,
-  Tag
+  Tag,
+  Switch
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
@@ -48,6 +49,9 @@ const SettingsAPIInfo = ({ options, refresh }) => {
   const [pageSize, setPageSize] = useState(10);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
 
+  // 面板启用状态 state
+  const [panelEnabled, setPanelEnabled] = useState(true);
+
   const colorOptions = [
     { value: 'blue', label: 'blue' },
     { value: 'green', label: 'green' },
@@ -85,7 +89,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
     try {
       setLoading(true);
       const apiInfoJson = JSON.stringify(apiInfoList);
-      await updateOption('ApiInfo', apiInfoJson);
+      await updateOption('console_setting.api_info', apiInfoJson);
       setHasChanges(false);
     } catch (error) {
       console.error('API信息更新失败', error);
@@ -185,10 +189,35 @@ const SettingsAPIInfo = ({ options, refresh }) => {
   };
 
   useEffect(() => {
-    if (options.ApiInfo !== undefined) {
-      parseApiInfo(options.ApiInfo);
+    const apiInfoStr = options['console_setting.api_info'] ?? options.ApiInfo;
+    if (apiInfoStr !== undefined) {
+      parseApiInfo(apiInfoStr);
     }
-  }, [options.ApiInfo]);
+  }, [options['console_setting.api_info'], options.ApiInfo]);
+
+  useEffect(() => {
+    const enabledStr = options['console_setting.api_info_enabled'];
+    setPanelEnabled(enabledStr === undefined ? true : enabledStr === 'true' || enabledStr === true);
+  }, [options['console_setting.api_info_enabled']]);
+
+  const handleToggleEnabled = async (checked) => {
+    const newValue = checked ? 'true' : 'false';
+    try {
+      const res = await API.put('/api/option/', {
+        key: 'console_setting.api_info_enabled',
+        value: newValue,
+      });
+      if (res.data.success) {
+        setPanelEnabled(checked);
+        showSuccess(t('设置已保存'));
+        refresh?.();
+      } else {
+        showError(res.data.message);
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  };
 
   const columns = [
     {
@@ -201,7 +230,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
       render: (text, record) => (
         <Tag
           color={record.color}
-          className="!rounded-full"
+          shape='circle'
           style={{ maxWidth: '280px' }}
         >
           {text}
@@ -248,7 +277,6 @@ const SettingsAPIInfo = ({ options, refresh }) => {
             theme='light'
             type='tertiary'
             size='small'
-            className="!rounded-full"
             onClick={() => handleEditApi(record)}
           >
             {t('编辑')}
@@ -258,7 +286,6 @@ const SettingsAPIInfo = ({ options, refresh }) => {
             type='danger'
             theme='light'
             size='small'
-            className="!rounded-full"
             onClick={() => handleDeleteApi(record)}
           >
             {t('删除')}
@@ -298,7 +325,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
             theme='light'
             type='primary'
             icon={<Plus size={14} />}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
             onClick={handleAddApi}
           >
             {t('添加API')}
@@ -309,7 +336,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
             theme='light'
             onClick={handleBatchDelete}
             disabled={selectedRowKeys.length === 0}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('批量删除')} {selectedRowKeys.length > 0 && `(${selectedRowKeys.length})`}
           </Button>
@@ -319,10 +346,19 @@ const SettingsAPIInfo = ({ options, refresh }) => {
             loading={loading}
             disabled={!hasChanges}
             type='secondary'
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('保存设置')}
           </Button>
+        </div>
+
+        {/* 启用开关 */}
+        <div className="order-1 md:order-2 flex items-center gap-2">
+          <Switch
+            checked={panelEnabled}
+            onChange={handleToggleEnabled}
+          />
+          <Text>{panelEnabled ? t('已启用') : t('已禁用')}</Text>
         </div>
       </div>
     </div>
@@ -392,7 +428,7 @@ const SettingsAPIInfo = ({ options, refresh }) => {
               style={{ padding: 30 }}
             />
           }
-          className="rounded-xl overflow-hidden"
+          className="overflow-hidden"
         />
       </Form.Section>
 
@@ -403,7 +439,6 @@ const SettingsAPIInfo = ({ options, refresh }) => {
         onCancel={() => setShowApiModal(false)}
         okText={t('保存')}
         cancelText={t('取消')}
-        className="rounded-xl"
         confirmLoading={modalLoading}
       >
         <Form layout='vertical' initValues={apiForm} key={editingApi ? editingApi.id : 'new'}>
@@ -457,7 +492,6 @@ const SettingsAPIInfo = ({ options, refresh }) => {
         okText={t('确认删除')}
         cancelText={t('取消')}
         type="warning"
-        className="rounded-xl"
         okButtonProps={{
           type: 'danger',
           theme: 'solid'

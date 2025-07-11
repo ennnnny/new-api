@@ -7,7 +7,9 @@ import {
   Typography,
   Empty,
   Divider,
-  Modal
+  Modal,
+  Switch,
+  Tooltip
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
@@ -37,41 +39,51 @@ const SettingsFAQ = ({ options, refresh }) => {
   const [loading, setLoading] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [faqForm, setFaqForm] = useState({
-    title: '',
-    content: ''
+    question: '',
+    answer: ''
   });
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
 
+  // 面板启用状态
+  const [panelEnabled, setPanelEnabled] = useState(true);
+
   const columns = [
     {
       title: t('问题标题'),
-      dataIndex: 'title',
-      key: 'title',
+      dataIndex: 'question',
+      key: 'question',
       render: (text) => (
-        <div style={{
-          maxWidth: '300px',
-          wordBreak: 'break-word',
-          fontWeight: 'bold'
-        }}>
-          {text}
-        </div>
+        <Tooltip content={text} showArrow>
+          <div style={{
+            maxWidth: '300px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: 'bold'
+          }}>
+            {text}
+          </div>
+        </Tooltip>
       )
     },
     {
       title: t('回答内容'),
-      dataIndex: 'content',
-      key: 'content',
+      dataIndex: 'answer',
+      key: 'answer',
       render: (text) => (
-        <div style={{
-          maxWidth: '400px',
-          wordBreak: 'break-word',
-          whiteSpace: 'pre-wrap',
-          color: 'var(--semi-color-text-1)'
-        }}>
-          {text}
-        </div>
+        <Tooltip content={text} showArrow>
+          <div style={{
+            maxWidth: '400px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            color: 'var(--semi-color-text-1)'
+          }}>
+            {text}
+          </div>
+        </Tooltip>
       )
     },
     {
@@ -86,7 +98,6 @@ const SettingsFAQ = ({ options, refresh }) => {
             theme='light'
             type='tertiary'
             size='small'
-            className="!rounded-full"
             onClick={() => handleEditFaq(record)}
           >
             {t('编辑')}
@@ -96,7 +107,6 @@ const SettingsFAQ = ({ options, refresh }) => {
             type='danger'
             theme='light'
             size='small'
-            className="!rounded-full"
             onClick={() => handleDeleteFaq(record)}
           >
             {t('删除')}
@@ -124,7 +134,7 @@ const SettingsFAQ = ({ options, refresh }) => {
     try {
       setLoading(true);
       const faqJson = JSON.stringify(faqList);
-      await updateOption('FAQ', faqJson);
+      await updateOption('console_setting.faq', faqJson);
       setHasChanges(false);
     } catch (error) {
       console.error('常见问答更新失败', error);
@@ -137,8 +147,8 @@ const SettingsFAQ = ({ options, refresh }) => {
   const handleAddFaq = () => {
     setEditingFaq(null);
     setFaqForm({
-      title: '',
-      content: ''
+      question: '',
+      answer: ''
     });
     setShowFaqModal(true);
   };
@@ -146,8 +156,8 @@ const SettingsFAQ = ({ options, refresh }) => {
   const handleEditFaq = (faq) => {
     setEditingFaq(faq);
     setFaqForm({
-      title: faq.title,
-      content: faq.content
+      question: faq.question,
+      answer: faq.answer
     });
     setShowFaqModal(true);
   };
@@ -169,7 +179,7 @@ const SettingsFAQ = ({ options, refresh }) => {
   };
 
   const handleSaveFaq = async () => {
-    if (!faqForm.title || !faqForm.content) {
+    if (!faqForm.question || !faqForm.answer) {
       showError('请填写完整的问答信息');
       return;
     }
@@ -226,10 +236,34 @@ const SettingsFAQ = ({ options, refresh }) => {
   };
 
   useEffect(() => {
-    if (options.FAQ !== undefined) {
-      parseFAQ(options.FAQ);
+    if (options['console_setting.faq'] !== undefined) {
+      parseFAQ(options['console_setting.faq']);
     }
-  }, [options.FAQ]);
+  }, [options['console_setting.faq']]);
+
+  useEffect(() => {
+    const enabledStr = options['console_setting.faq_enabled'];
+    setPanelEnabled(enabledStr === undefined ? true : enabledStr === 'true' || enabledStr === true);
+  }, [options['console_setting.faq_enabled']]);
+
+  const handleToggleEnabled = async (checked) => {
+    const newValue = checked ? 'true' : 'false';
+    try {
+      const res = await API.put('/api/option/', {
+        key: 'console_setting.faq_enabled',
+        value: newValue,
+      });
+      if (res.data.success) {
+        setPanelEnabled(checked);
+        showSuccess(t('设置已保存'));
+        refresh?.();
+      } else {
+        showError(res.data.message);
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  };
 
   const handleBatchDelete = () => {
     if (selectedRowKeys.length === 0) {
@@ -261,7 +295,7 @@ const SettingsFAQ = ({ options, refresh }) => {
             theme='light'
             type='primary'
             icon={<Plus size={14} />}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
             onClick={handleAddFaq}
           >
             {t('添加问答')}
@@ -272,7 +306,7 @@ const SettingsFAQ = ({ options, refresh }) => {
             theme='light'
             onClick={handleBatchDelete}
             disabled={selectedRowKeys.length === 0}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('批量删除')} {selectedRowKeys.length > 0 && `(${selectedRowKeys.length})`}
           </Button>
@@ -282,10 +316,16 @@ const SettingsFAQ = ({ options, refresh }) => {
             loading={loading}
             disabled={!hasChanges}
             type='secondary'
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('保存设置')}
           </Button>
+        </div>
+
+        {/* 启用开关 */}
+        <div className="order-1 md:order-2 flex items-center gap-2">
+          <Switch checked={panelEnabled} onChange={handleToggleEnabled} />
+          <Text>{panelEnabled ? t('已启用') : t('已禁用')}</Text>
         </div>
       </div>
     </div>
@@ -355,7 +395,7 @@ const SettingsFAQ = ({ options, refresh }) => {
               style={{ padding: 30 }}
             />
           }
-          className="rounded-xl overflow-hidden"
+          className="overflow-hidden"
         />
       </Form.Section>
 
@@ -366,27 +406,26 @@ const SettingsFAQ = ({ options, refresh }) => {
         onCancel={() => setShowFaqModal(false)}
         okText={t('保存')}
         cancelText={t('取消')}
-        className="rounded-xl"
         confirmLoading={modalLoading}
         width={800}
       >
         <Form layout='vertical' initValues={faqForm} key={editingFaq ? editingFaq.id : 'new'}>
           <Form.Input
-            field='title'
+            field='question'
             label={t('问题标题')}
             placeholder={t('请输入问题标题')}
             maxLength={200}
             rules={[{ required: true, message: t('请输入问题标题') }]}
-            onChange={(value) => setFaqForm({ ...faqForm, title: value })}
+            onChange={(value) => setFaqForm({ ...faqForm, question: value })}
           />
           <Form.TextArea
-            field='content'
+            field='answer'
             label={t('回答内容')}
-            placeholder={t('请输入回答内容')}
+            placeholder={t('请输入回答内容（支持 Markdown/HTML）')}
             maxCount={1000}
             rows={6}
             rules={[{ required: true, message: t('请输入回答内容') }]}
-            onChange={(value) => setFaqForm({ ...faqForm, content: value })}
+            onChange={(value) => setFaqForm({ ...faqForm, answer: value })}
           />
         </Form>
       </Modal>
@@ -402,7 +441,6 @@ const SettingsFAQ = ({ options, refresh }) => {
         okText={t('确认删除')}
         cancelText={t('取消')}
         type="warning"
-        className="rounded-xl"
         okButtonProps={{
           type: 'danger',
           theme: 'solid'

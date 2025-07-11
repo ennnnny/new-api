@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"one-api/common"
+	"one-api/dto"
 	"one-api/model"
 	"one-api/setting"
 	"strconv"
@@ -226,6 +227,9 @@ func Register(c *gin.Context) {
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
 		}
+		if setting.DefaultUseAutoGroup {
+			token.Group = "auto"
+		}
 		if err := token.Insert(); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -243,15 +247,15 @@ func Register(c *gin.Context) {
 }
 
 func GetAllUsers(c *gin.Context) {
-	p, _ := strconv.Atoi(c.Query("p"))
-	pageSize, _ := strconv.Atoi(c.Query("page_size"))
-	if p < 1 {
-		p = 1
+	pageInfo, err := common.GetPageQuery(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "parse page query failed",
+		})
+		return
 	}
-	if pageSize < 0 {
-		pageSize = common.ItemsPerPage
-	}
-	users, total, err := model.GetAllUsers((p-1)*pageSize, pageSize)
+	users, total, err := model.GetAllUsers(pageInfo)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -259,15 +263,13 @@ func GetAllUsers(c *gin.Context) {
 		})
 		return
 	}
+
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(users)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data": gin.H{
-			"items":     users,
-			"total":     total,
-			"page":      p,
-			"page_size": pageSize,
-		},
+		"data":    pageInfo,
 	})
 	return
 }
@@ -459,6 +461,9 @@ func GetSelf(c *gin.Context) {
 		})
 		return
 	}
+	// Hide admin remarks: set to empty to trigger omitempty tag, ensuring the remark field is not included in JSON returned to regular users
+	user.Remark = ""
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -483,7 +488,7 @@ func GetUserModels(c *gin.Context) {
 	groups := setting.GetUserUsableGroups(user.Group)
 	var models []string
 	for group := range groups {
-		for _, g := range model.GetGroupModels(group) {
+		for _, g := range model.GetGroupEnabledModels(group) {
 			if !common.StringsContains(models, g) {
 				models = append(models, g)
 			}
@@ -957,7 +962,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 验证预警类型
-	if req.QuotaWarningType != constant.NotifyTypeEmail && req.QuotaWarningType != constant.NotifyTypeWebhook {
+	if req.QuotaWarningType != dto.NotifyTypeEmail && req.QuotaWarningType != dto.NotifyTypeWebhook {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "无效的预警类型",
@@ -975,7 +980,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是webhook类型,验证webhook地址
-	if req.QuotaWarningType == constant.NotifyTypeWebhook {
+	if req.QuotaWarningType == dto.NotifyTypeWebhook {
 		if req.WebhookUrl == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -994,7 +999,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 如果是邮件类型，验证邮箱地址
-	if req.QuotaWarningType == constant.NotifyTypeEmail && req.NotificationEmail != "" {
+	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
 		// 验证邮箱格式
 		if !strings.Contains(req.NotificationEmail, "@") {
 			c.JSON(http.StatusOK, gin.H{
@@ -1016,24 +1021,24 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 构建设置
-	settings := map[string]interface{}{
-		constant.UserSettingNotifyType:            req.QuotaWarningType,
-		constant.UserSettingQuotaWarningThreshold: req.QuotaWarningThreshold,
-		"accept_unset_model_ratio_model":          req.AcceptUnsetModelRatioModel,
-		constant.UserSettingRecordIpLog:           req.RecordIpLog,
+	settings := dto.UserSetting{
+		NotifyType:            req.QuotaWarningType,
+		QuotaWarningThreshold: req.QuotaWarningThreshold,
+		AcceptUnsetRatioModel: req.AcceptUnsetModelRatioModel,
+		RecordIpLog:           req.RecordIpLog,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置
-	if req.QuotaWarningType == constant.NotifyTypeWebhook {
-		settings[constant.UserSettingWebhookUrl] = req.WebhookUrl
+	if req.QuotaWarningType == dto.NotifyTypeWebhook {
+		settings.WebhookUrl = req.WebhookUrl
 		if req.WebhookSecret != "" {
-			settings[constant.UserSettingWebhookSecret] = req.WebhookSecret
+			settings.WebhookSecret = req.WebhookSecret
 		}
 	}
 
 	// 如果提供了通知邮箱，添加到设置中
-	if req.QuotaWarningType == constant.NotifyTypeEmail && req.NotificationEmail != "" {
-		settings[constant.UserSettingNotificationEmail] = req.NotificationEmail
+	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+		settings.NotificationEmail = req.NotificationEmail
 	}
 
 	// 更新用户设置

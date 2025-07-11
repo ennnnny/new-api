@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Button,
   Space,
@@ -8,7 +8,10 @@ import {
   Empty,
   Divider,
   Modal,
-  Tag
+  Tag,
+  Switch,
+  TextArea,
+  Tooltip
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
@@ -19,7 +22,8 @@ import {
   Edit,
   Trash2,
   Save,
-  Bell
+  Bell,
+  Maximize2
 } from 'lucide-react';
 import { API, showError, showSuccess, getRelativeTime, formatDateTimeString } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
@@ -32,6 +36,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   const [announcementsList, setAnnouncementsList] = useState([]);
   const [showAnnouncementModal, setShowAnnouncementModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showContentModal, setShowContentModal] = useState(false);
   const [deletingAnnouncement, setDeletingAnnouncement] = useState(null);
   const [editingAnnouncement, setEditingAnnouncement] = useState(null);
   const [modalLoading, setModalLoading] = useState(false);
@@ -46,6 +51,11 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+
+  // 面板启用状态
+  const [panelEnabled, setPanelEnabled] = useState(true);
+
+  const formApiRef = useRef(null);
 
   const typeOptions = [
     { value: 'default', label: t('默认') },
@@ -72,13 +82,16 @@ const SettingsAnnouncements = ({ options, refresh }) => {
       dataIndex: 'content',
       key: 'content',
       render: (text) => (
-        <div style={{
-          maxWidth: '300px',
-          wordBreak: 'break-word',
-          whiteSpace: 'pre-wrap'
-        }}>
-          {text}
-        </div>
+        <Tooltip content={text} position='topLeft' showArrow>
+          <div style={{
+            maxWidth: '300px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}>
+            {text}
+          </div>
+        </Tooltip>
       )
     },
     {
@@ -117,13 +130,17 @@ const SettingsAnnouncements = ({ options, refresh }) => {
       dataIndex: 'extra',
       key: 'extra',
       render: (text) => (
-        <div style={{
-          maxWidth: '200px',
-          wordBreak: 'break-word',
-          color: 'var(--semi-color-text-2)'
-        }}>
-          {text || '-'}
-        </div>
+        <Tooltip content={text || '-'} showArrow>
+          <div style={{
+            maxWidth: '200px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            color: 'var(--semi-color-text-2)'
+          }}>
+            {text || '-'}
+          </div>
+        </Tooltip>
       )
     },
     {
@@ -138,7 +155,6 @@ const SettingsAnnouncements = ({ options, refresh }) => {
             theme='light'
             type='tertiary'
             size='small'
-            className="!rounded-full"
             onClick={() => handleEditAnnouncement(record)}
           >
             {t('编辑')}
@@ -148,7 +164,6 @@ const SettingsAnnouncements = ({ options, refresh }) => {
             type='danger'
             theme='light'
             size='small'
-            className="!rounded-full"
             onClick={() => handleDeleteAnnouncement(record)}
           >
             {t('删除')}
@@ -176,7 +191,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
     try {
       setLoading(true);
       const announcementsJson = JSON.stringify(announcementsList);
-      await updateOption('Announcements', announcementsJson);
+      await updateOption('console_setting.announcements', announcementsJson);
       setHasChanges(false);
     } catch (error) {
       console.error('系统公告更新失败', error);
@@ -288,10 +303,35 @@ const SettingsAnnouncements = ({ options, refresh }) => {
   };
 
   useEffect(() => {
-    if (options.Announcements !== undefined) {
-      parseAnnouncements(options.Announcements);
+    const annStr = options['console_setting.announcements'] ?? options.Announcements;
+    if (annStr !== undefined) {
+      parseAnnouncements(annStr);
     }
-  }, [options.Announcements]);
+  }, [options['console_setting.announcements'], options.Announcements]);
+
+  useEffect(() => {
+    const enabledStr = options['console_setting.announcements_enabled'];
+    setPanelEnabled(enabledStr === undefined ? true : enabledStr === 'true' || enabledStr === true);
+  }, [options['console_setting.announcements_enabled']]);
+
+  const handleToggleEnabled = async (checked) => {
+    const newValue = checked ? 'true' : 'false';
+    try {
+      const res = await API.put('/api/option/', {
+        key: 'console_setting.announcements_enabled',
+        value: newValue,
+      });
+      if (res.data.success) {
+        setPanelEnabled(checked);
+        showSuccess(t('设置已保存'));
+        refresh?.();
+      } else {
+        showError(res.data.message);
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  };
 
   const handleBatchDelete = () => {
     if (selectedRowKeys.length === 0) {
@@ -323,7 +363,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
             theme='light'
             type='primary'
             icon={<Plus size={14} />}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
             onClick={handleAddAnnouncement}
           >
             {t('添加公告')}
@@ -334,7 +374,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
             theme='light'
             onClick={handleBatchDelete}
             disabled={selectedRowKeys.length === 0}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('批量删除')} {selectedRowKeys.length > 0 && `(${selectedRowKeys.length})`}
           </Button>
@@ -344,20 +384,32 @@ const SettingsAnnouncements = ({ options, refresh }) => {
             loading={loading}
             disabled={!hasChanges}
             type='secondary'
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
           >
             {t('保存设置')}
           </Button>
+        </div>
+
+        {/* 启用开关 */}
+        <div className="order-1 md:order-2 flex items-center gap-2">
+          <Switch checked={panelEnabled} onChange={handleToggleEnabled} />
+          <Text>{panelEnabled ? t('已启用') : t('已禁用')}</Text>
         </div>
       </div>
     </div>
   );
 
-  // 计算当前页显示的数据
+  // 计算当前页显示的数据（按发布时间倒序排序，最新优先显示）
   const getCurrentPageData = () => {
+    const sortedList = [...announcementsList].sort((a, b) => {
+      const dateA = new Date(a.publishDate).getTime();
+      const dateB = new Date(b.publishDate).getTime();
+      return dateB - dateA; // 倒序，最新的排在前面
+    });
+
     const startIndex = (currentPage - 1) * pageSize;
     const endIndex = startIndex + pageSize;
-    return announcementsList.slice(startIndex, endIndex);
+    return sortedList.slice(startIndex, endIndex);
   };
 
   const rowSelection = {
@@ -417,7 +469,7 @@ const SettingsAnnouncements = ({ options, refresh }) => {
               style={{ padding: 30 }}
             />
           }
-          className="rounded-xl overflow-hidden"
+          className="overflow-hidden"
         />
       </Form.Section>
 
@@ -428,19 +480,33 @@ const SettingsAnnouncements = ({ options, refresh }) => {
         onCancel={() => setShowAnnouncementModal(false)}
         okText={t('保存')}
         cancelText={t('取消')}
-        className="rounded-xl"
         confirmLoading={modalLoading}
       >
-        <Form layout='vertical' initValues={announcementForm} key={editingAnnouncement ? editingAnnouncement.id : 'new'}>
+        <Form
+          layout='vertical'
+          initValues={announcementForm}
+          key={editingAnnouncement ? editingAnnouncement.id : 'new'}
+          getFormApi={(api) => (formApiRef.current = api)}
+        >
           <Form.TextArea
             field='content'
             label={t('公告内容')}
-            placeholder={t('请输入公告内容')}
+            placeholder={t('请输入公告内容（支持 Markdown/HTML）')}
             maxCount={500}
             rows={3}
             rules={[{ required: true, message: t('请输入公告内容') }]}
             onChange={(value) => setAnnouncementForm({ ...announcementForm, content: value })}
           />
+          <Button
+            theme='light'
+            type='tertiary'
+            size='small'
+            icon={<Maximize2 size={14} />}
+            style={{ marginBottom: 16 }}
+            onClick={() => setShowContentModal(true)}
+          >
+            {t('放大编辑')}
+          </Button>
           <Form.DatePicker
             field='publishDate'
             label={t('发布日期')}
@@ -474,13 +540,38 @@ const SettingsAnnouncements = ({ options, refresh }) => {
         okText={t('确认删除')}
         cancelText={t('取消')}
         type="warning"
-        className="rounded-xl"
         okButtonProps={{
           type: 'danger',
           theme: 'solid'
         }}
       >
         <Text>{t('确定要删除此公告吗？')}</Text>
+      </Modal>
+
+      {/* 公告内容放大编辑 Modal */}
+      <Modal
+        title={t('编辑公告内容')}
+        visible={showContentModal}
+        onOk={() => {
+          // 将内容同步到表单
+          if (formApiRef.current) {
+            formApiRef.current.setValue('content', announcementForm.content);
+          }
+          setShowContentModal(false);
+        }}
+        onCancel={() => setShowContentModal(false)}
+        okText={t('确定')}
+        cancelText={t('取消')}
+        width={800}
+      >
+        <TextArea
+          value={announcementForm.content}
+          placeholder={t('请输入公告内容（支持 Markdown/HTML）')}
+          maxCount={500}
+          rows={15}
+          style={{ width: '100%' }}
+          onChange={(value) => setAnnouncementForm({ ...announcementForm, content: value })}
+        />
       </Modal>
     </>
   );
