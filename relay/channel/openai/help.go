@@ -18,6 +18,7 @@ import (
 	relaycommon "one-api/relay/common"
 	"one-api/relay/helper"
 	"one-api/service"
+	"one-api/types"
 	"strings"
 	"sync"
 	"time"
@@ -464,7 +465,7 @@ type NotdiamondData struct {
 	} `json:"output,omitempty"`
 }
 
-func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	//account := InitNAccount(info.ApiKey)
 	//changeCookie := false
 	//for _, cookie := range resp.Cookies() {
@@ -533,10 +534,20 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 	err := resp.Body.Close()
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "close_response_body_failed",
+			Type:    "notdiamond_error",
+			Param:   "",
+			Code:    "close_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	if len(respArr) < 1 {
-		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "unmarshal_response_body_failed",
+			Type:    "notdiamond_error",
+			Param:   "",
+			Code:    "unmarshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
@@ -566,7 +577,12 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "marshal_response_body_failed",
+			Type:    "notdiamond_error",
+			Param:   "",
+			Code:    "marshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
@@ -575,7 +591,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	return nil, &usage
 }
 
-func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	//account := InitNAccount(info.ApiKey)
 	//changeCookie := false
 	//for _, cookie := range resp.Cookies() {
@@ -694,7 +710,12 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	})
 	err := resp.Body.Close()
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "close_response_body_failed",
+			Type:    "notdiamond_error",
+			Param:   "",
+			Code:    "close_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
@@ -902,7 +923,7 @@ func ToGetMerlinReq(requestBody io.Reader) string {
 	return string(outputJSON)
 }
 
-func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	var respArr []string
 	scanner := bufio.NewScanner(resp.Body)
@@ -953,11 +974,21 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 	})
 	err := resp.Body.Close()
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "close_response_body_failed",
+			Type:    "merlin_error",
+			Param:   "",
+			Code:    "close_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	allContent := strings.Join(respArr, "")
 	if allContent == "" {
-		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "unmarshal_response_body_failed",
+			Type:    "merlin_error",
+			Param:   "",
+			Code:    "unmarshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	completionTokens := service.CountTextToken(allContent, info.UpstreamModelName)
 	usage := dto.Usage{
@@ -969,7 +1000,7 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 	return nil, &usage
 }
 
-func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.OpenAIErrorWithStatusCode, *dto.Usage) {
+func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	var respArr []string
@@ -988,10 +1019,20 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	err := resp.Body.Close()
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "close_response_body_failed",
+			Type:    "merlin_error",
+			Param:   "",
+			Code:    "close_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	if len(respArr) < 1 {
-		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "unmarshal_response_body_failed",
+			Type:    "merlin_error",
+			Param:   "",
+			Code:    "unmarshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
@@ -1021,7 +1062,12 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
-		return service.OpenAIErrorWrapper(err, "marshal_response_body_failed", http.StatusInternalServerError), nil
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "marshal_response_body_failed",
+			Type:    "merlin_error",
+			Param:   "",
+			Code:    "marshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
