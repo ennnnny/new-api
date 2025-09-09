@@ -610,6 +610,28 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 			//common.SysLog("GetMerlin request body: " + newBodyString)
 			requestBody = strings.NewReader(newBodyString)
 		}
+		//groq_web
+		if info.ChannelType == constant.ChannelTypeOpenAIMax {
+			bodyBytes, _ := io.ReadAll(requestBody)
+
+			var requestMap map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &requestMap); err != nil {
+				// 如果解析失败，返回原始请求体
+				requestBody = bytes.NewReader(bodyBytes)
+			} else {
+				// 移除max_tokens字段
+				delete(requestMap, "max_tokens")
+
+				// 重新序列化为JSON
+				modifiedBytes, err := json.Marshal(requestMap)
+				if err != nil {
+					// 如果序列化失败，返回原始请求体
+					requestBody = bytes.NewReader(bodyBytes)
+				} else {
+					requestBody = bytes.NewReader(modifiedBytes)
+				}
+			}
+		}
 
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
