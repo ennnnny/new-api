@@ -2,15 +2,13 @@ package openai
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/bytedance/gopkg/util/gopool"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"one-api/common"
@@ -19,9 +17,14 @@ import (
 	"one-api/relay/helper"
 	"one-api/service"
 	"one-api/types"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type GerProfile struct {
@@ -1077,3 +1080,773 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 }
 
 //GetMerlin End
+
+func GenZaiHeader(c *http.Header, info *relaycommon.RelayInfo) {
+	if info.ApiKey == "zai" {
+		info.ApiKey, _ = getZaiAnonymousToken()
+	}
+	c.Set("Content-Type", "application/json")
+	c.Set("Accept", "application/json, text/event-stream")
+	c.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	c.Set("Authorization", "Bearer "+info.ApiKey)
+	c.Set("Accept-Language", "zh-CN")
+	c.Set("sec-ch-ua", "\"Not;A=Brand\";v=\"99\", \"Microsoft Edge\";v=\"140\", \"Chromium\";v=\"140\"")
+	c.Set("sec-ch-ua-mobile", "?0")
+	c.Set("sec-ch-ua-platform", "\"Windows\"")
+	c.Set("X-FE-Version", "prod-fe-1.0.70")
+	c.Set("Origin", "https://chat.z.ai")
+	chatID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
+	c.Set("Referer", "https://chat.z.ai/c/"+chatID)
+}
+
+// 获取匿名token（每次对话使用不同token，避免共享记忆）
+func getZaiAnonymousToken() (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", "https://chat.z.ai/api/v1/auths/", nil)
+	if err != nil {
+		return "", err
+	}
+	// 伪装浏览器头
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("X-FE-Version", "prod-fe-1.0.70")
+	req.Header.Set("sec-ch-ua", "\"Not;A=Brand\";v=\"99\", \"Microsoft Edge\";v=\"140\", \"Chromium\";v=\"140\"")
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", "\"Windows\"")
+	req.Header.Set("Origin", "https://chat.z.ai")
+	req.Header.Set("Referer", "https://chat.z.ai/")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("anon token status=%d", resp.StatusCode)
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", err
+	}
+	if body.Token == "" {
+		return "", fmt.Errorf("anon token empty")
+	}
+	return body.Token, nil
+}
+
+// getChineseWeekday 返回中文星期几
+func getChineseWeekday(weekday time.Weekday) string {
+	weekdays := map[time.Weekday]string{
+		time.Sunday:    "星期日",
+		time.Monday:    "星期一",
+		time.Tuesday:   "星期二",
+		time.Wednesday: "星期三",
+		time.Thursday:  "星期四",
+		time.Friday:    "星期五",
+		time.Saturday:  "星期六",
+	}
+	return weekdays[weekday]
+}
+
+// ModelZaiConfig 模型配置结构
+type ModelZaiConfig struct {
+	ID            string                 `json:"id"`            // OpenAI API中的模型ID
+	Name          string                 `json:"name"`          // 显示名称
+	UpstreamID    string                 `json:"upstreamId"`    // Z.ai上游的模型ID
+	Capabilities  ModelZaiCapabilities   `json:"capabilities"`  // 模型能力
+	DefaultParams map[string]interface{} `json:"defaultParams"` // 默认参数
+}
+
+// ModelZaiCapabilities 模型能力配置
+type ModelZaiCapabilities struct {
+	Vision   bool `json:"vision"`   // 视觉能力
+	MCP      bool `json:"mcp"`      // MCP能力
+	Thinking bool `json:"thinking"` // 思考能力
+}
+
+// SUPPORTED_Z_MODELS 支持的模型配置
+var SUPPORTED_Z_MODELS = []ModelZaiConfig{
+	{
+		ID:         "0727-360B-API",
+		Name:       "GLM-4.5",
+		UpstreamID: "0727-360B-API",
+		Capabilities: ModelZaiCapabilities{
+			Vision:   false,
+			MCP:      true,
+			Thinking: true,
+		},
+		DefaultParams: map[string]interface{}{
+			"top_p":       0.95,
+			"temperature": 0.6,
+			"max_tokens":  80000,
+		},
+	},
+	{
+		ID:         "glm-4.5v",
+		Name:       "GLM-4.5V",
+		UpstreamID: "glm-4.5v",
+		Capabilities: ModelZaiCapabilities{
+			Vision:   true,
+			MCP:      false,
+			Thinking: true,
+		},
+		DefaultParams: map[string]interface{}{
+			"top_p":       0.6,
+			"temperature": 0.8,
+		},
+	},
+}
+
+// getZaiModelConfig 根据模型ID获取配置
+func getZaiModelConfig(modelID string) *ModelZaiConfig {
+	// 标准化模型ID
+	normalizedModelID := normalizeZaiModelID(modelID)
+
+	for _, model := range SUPPORTED_Z_MODELS {
+		if model.ID == normalizedModelID {
+			return &model
+		}
+	}
+
+	// 如果未找到，返回默认模型
+	if len(SUPPORTED_Z_MODELS) > 0 {
+		return &SUPPORTED_Z_MODELS[0]
+	}
+
+	return nil
+}
+
+// normalizeZaiModelID 标准化模型ID，处理不同客户端的命名差异
+func normalizeZaiModelID(modelID string) string {
+	normalized := strings.ToLower(strings.TrimSpace(modelID))
+
+	// 处理常见的模型ID映射
+	modelMappings := map[string]string{
+		"glm-4.5v":             "glm-4.5v",
+		"glm4.5v":              "glm-4.5v",
+		"glm_4.5v":             "glm-4.5v",
+		"gpt-4-vision-preview": "glm-4.5v", // 向后兼容
+		"0727-360b-api":        "0727-360B-API",
+		"glm-4.5":              "0727-360B-API",
+		"glm4.5":               "0727-360B-API",
+		"glm_4.5":              "0727-360B-API",
+		"gpt-4":                "0727-360B-API", // 向后兼容
+	}
+
+	if mapped, exists := modelMappings[normalized]; exists {
+		return mapped
+	}
+
+	return normalized
+}
+
+// processZaiMessageContent 处理消息内容，支持多模态内容检测和模型能力检查
+func processZaiMessageContent(content interface{}, modelConfig *ModelZaiConfig) interface{} {
+	// 检查是否为多模态消息（数组格式）
+	if contentArray, ok := content.([]interface{}); ok {
+		// 验证模型是否支持多模态
+		if !modelConfig.Capabilities.Vision {
+			// 模型不支持多模态，只保留文本内容
+			var textParts []string
+			for _, block := range contentArray {
+				if blockMap, ok := block.(map[string]interface{}); ok {
+					if blockType, exists := blockMap["type"]; exists && blockType == "text" {
+						if text, exists := blockMap["text"]; exists {
+							if textStr, ok := text.(string); ok {
+								textParts = append(textParts, textStr)
+							}
+						}
+					}
+				}
+			}
+			// 将文本内容合并为字符串
+			if len(textParts) > 0 {
+				return strings.Join(textParts, "\n")
+			}
+			return ""
+		}
+
+		// 模型支持多模态，处理所有内容类型
+		var processedBlocks []interface{}
+		for _, block := range contentArray {
+			if blockMap, ok := block.(map[string]interface{}); ok {
+				blockType, _ := blockMap["type"].(string)
+				switch blockType {
+				case "text":
+					// 保留文本内容
+					processedBlocks = append(processedBlocks, block)
+				case "image_url":
+					// 检查图像URL是否有效
+					if imageUrl, exists := blockMap["image_url"]; exists {
+						if imageUrlMap, ok := imageUrl.(map[string]interface{}); ok {
+							if url, exists := imageUrlMap["url"]; exists {
+								if urlStr, ok := url.(string); ok && urlStr != "" {
+									processedBlocks = append(processedBlocks, block)
+								}
+							}
+						}
+					}
+				case "video_url":
+					// 检查视频URL是否有效
+					if videoUrl, exists := blockMap["video_url"]; exists {
+						if videoUrlMap, ok := videoUrl.(map[string]interface{}); ok {
+							if url, exists := videoUrlMap["url"]; exists {
+								if urlStr, ok := url.(string); ok && urlStr != "" {
+									processedBlocks = append(processedBlocks, block)
+								}
+							}
+						}
+					}
+				case "document_url":
+					// 检查文档URL是否有效
+					if docUrl, exists := blockMap["document_url"]; exists {
+						if docUrlMap, ok := docUrl.(map[string]interface{}); ok {
+							if url, exists := docUrlMap["url"]; exists {
+								if urlStr, ok := url.(string); ok && urlStr != "" {
+									processedBlocks = append(processedBlocks, block)
+								}
+							}
+						}
+					}
+				case "audio_url":
+					// 检查音频URL是否有效
+					if audioUrl, exists := blockMap["audio_url"]; exists {
+						if audioUrlMap, ok := audioUrl.(map[string]interface{}); ok {
+							if url, exists := audioUrlMap["url"]; exists {
+								if urlStr, ok := url.(string); ok && urlStr != "" {
+									processedBlocks = append(processedBlocks, block)
+								}
+							}
+						}
+					}
+				default:
+					// 保留其他类型的内容块
+					processedBlocks = append(processedBlocks, block)
+				}
+			}
+		}
+		return processedBlocks
+	}
+
+	// 非多模态消息，直接返回原内容
+	return content
+}
+
+func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
+	bodyBytes, _ := io.ReadAll(requestBody)
+
+	var requestMap map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &requestMap); err != nil {
+		// 如果解析失败，返回原始请求体
+		return bytes.NewReader(bodyBytes)
+	}
+
+	// 从 HeadersOverride 中的 Referer 提取 chatID
+	var chatID string
+	if info.HeadersOverride != nil {
+		if refererValue, exists := info.HeadersOverride["Referer"]; exists {
+			if refererStr, ok := refererValue.(string); ok {
+				// 从 Referer 中提取 chatID，格式如: https://chat.z.ai/c/{chatID}
+				if strings.Contains(refererStr, "/c/") {
+					parts := strings.Split(refererStr, "/c/")
+					if len(parts) > 1 {
+						chatID = parts[1]
+					}
+				}
+			}
+		}
+	}
+	// 如果没有从 Referer 中提取到 chatID，则生成新的
+	if chatID == "" {
+		chatID = fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
+	}
+
+	msgID := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	// 获取模型配置
+	var modelConfig *ModelZaiConfig
+	if modelVal, ok := requestMap["model"]; ok {
+		if modelStr, ok := modelVal.(string); ok {
+			modelConfig = getZaiModelConfig(modelStr)
+		}
+	}
+
+	// 如果没有找到模型配置，使用默认模型
+	if modelConfig == nil {
+		modelConfig = &SUPPORTED_Z_MODELS[0]
+	}
+
+	// 处理消息
+	var messages []map[string]interface{}
+	if messagesVal, ok := requestMap["messages"]; ok {
+		if messagesArray, ok := messagesVal.([]interface{}); ok {
+			for _, msgVal := range messagesArray {
+				if msgMap, ok := msgVal.(map[string]interface{}); ok {
+					// 构造消息对象
+					message := map[string]interface{}{
+						"role": msgMap["role"],
+					}
+
+					// 处理content字段 - 支持字符串或数组格式，参考processMessages逻辑
+					if content, exists := msgMap["content"]; exists {
+						processedContent := processZaiMessageContent(content, modelConfig)
+						message["content"] = processedContent
+					}
+
+					messages = append(messages, message)
+				}
+			}
+		}
+	}
+
+	// 决定是否启用思考功能 - 优先使用请求参数，否则使用模型默认配置
+	enableThinking := modelConfig.Capabilities.Thinking
+	if thinkingVal, ok := requestMap["enable_thinking"]; ok {
+		if thinkingBool, ok := thinkingVal.(bool); ok {
+			enableThinking = thinkingBool
+		}
+	}
+
+	// 构造上游请求体
+	upstreamReq := map[string]interface{}{
+		"stream":   true,
+		"chat_id":  chatID,
+		"id":       msgID,
+		"model":    modelConfig.UpstreamID,
+		"messages": messages,
+		"params":   modelConfig.DefaultParams,
+		"features": map[string]interface{}{
+			"enable_thinking":  enableThinking,
+			"image_generation": false,
+			"web_search":       false,
+			"auto_web_search":  false,
+			"preview_mode":     modelConfig.Capabilities.Vision,
+		},
+		"background_tasks": map[string]bool{
+			"title_generation": false,
+			"tags_generation":  false,
+		},
+		"tool_servers": []string{},
+		"variables": map[string]string{
+			"{{USER_NAME}}":        fmt.Sprintf("Guest-%d", time.Now().UnixNano()/1e6),
+			"{{USER_LOCATION}}":    "Unknown",
+			"{{CURRENT_DATETIME}}": time.Now().Format("2006-01-02 15:04:05"),
+			"{{CURRENT_DATE}}":     time.Now().Format("2006-01-02"),
+			"{{CURRENT_TIME}}":     time.Now().Format("15:04:05"),
+			"{{CURRENT_WEEKDAY}}":  getChineseWeekday(time.Now().Weekday()),
+			"{{CURRENT_TIMEZONE}}": "Asia/Shanghai",
+			"{{USER_LANGUAGE}}":    "zh-CN",
+		},
+	}
+
+	// 根据模型配置设置 mcp_servers
+	if modelConfig.Capabilities.MCP {
+		upstreamReq["mcp_servers"] = []string{}
+	}
+
+	// 构建 model_item - 检查模型是否在支持列表中
+	modelExists := false
+	for _, supportedModel := range SUPPORTED_Z_MODELS {
+		if supportedModel.ID == modelConfig.ID {
+			modelExists = true
+			break
+		}
+	}
+
+	if modelExists {
+		// 模型存在，构建完整的 model_item
+		description := "Most advanced model, proficient in coding and tool use"
+		if modelConfig.Capabilities.Vision {
+			description = "Advanced visual understanding and analysis"
+		}
+
+		upstreamReq["model_item"] = map[string]interface{}{
+			"id":       modelConfig.UpstreamID,
+			"name":     modelConfig.Name,
+			"owned_by": "openai",
+			"openai": map[string]interface{}{
+				"id":       modelConfig.UpstreamID,
+				"name":     modelConfig.UpstreamID,
+				"owned_by": "openai",
+				"openai": map[string]interface{}{
+					"id": modelConfig.UpstreamID,
+				},
+				"urlIdx": 1,
+			},
+			"urlIdx": 1,
+			"info": map[string]interface{}{
+				"id":            modelConfig.UpstreamID,
+				"user_id":       "api-user",
+				"base_model_id": nil,
+				"name":          modelConfig.Name,
+				"params":        modelConfig.DefaultParams,
+				"meta": map[string]interface{}{
+					"profile_image_url": "/static/favicon.png",
+					"description":       description,
+					"capabilities": map[string]interface{}{
+						"vision":             modelConfig.Capabilities.Vision,
+						"citations":          false,
+						"preview_mode":       modelConfig.Capabilities.Vision,
+						"web_search":         false,
+						"language_detection": false,
+						"restore_n_source":   false,
+						"mcp":                modelConfig.Capabilities.MCP,
+						"file_qa":            modelConfig.Capabilities.MCP,
+						"returnFc":           true,
+						"returnThink":        modelConfig.Capabilities.Thinking,
+						"think":              modelConfig.Capabilities.Thinking,
+					},
+				},
+			},
+		}
+	} else {
+		// 模型不存在，只包含基本信息
+		upstreamReq["model_item"] = map[string]interface{}{
+			"id":       modelConfig.UpstreamID,
+			"name":     modelConfig.Name,
+			"owned_by": "openai",
+		}
+	}
+
+	// 序列化为JSON
+	upstreamBytes, err := json.Marshal(upstreamReq)
+	if err != nil {
+		// 如果序列化失败，返回原始请求体
+		return bytes.NewReader(bodyBytes)
+	}
+
+	return bytes.NewReader(upstreamBytes)
+}
+
+func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+	var respArr []string
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	dataChan := make(chan string)
+	stopChan := make(chan bool)
+
+	// 思考内容处理策略
+	transformThinking := func(s string) string {
+		// 去除 <summary>…</summary>
+		re := regexp.MustCompile(`(?s)<summary>.*?</summary>`)
+		s = re.ReplaceAllString(s, "")
+		// 清理残留自定义标签
+		s = strings.ReplaceAll(s, "</thinking>", "")
+		s = strings.ReplaceAll(s, "<Full>", "")
+		s = strings.ReplaceAll(s, "</Full>", "")
+		s = strings.TrimSpace(s)
+
+		// 根据策略处理 <details> 标签
+		switch "strip" { // 对应 THINK_TAGS_MODE
+		case "think":
+			re := regexp.MustCompile(`<details[^>]*>`)
+			s = re.ReplaceAllString(s, "<think>")
+			s = strings.ReplaceAll(s, "</details>", "</think>")
+		case "strip":
+			re := regexp.MustCompile(`<details[^>]*>`)
+			s = re.ReplaceAllString(s, "")
+			s = strings.ReplaceAll(s, "</details>", "")
+		}
+
+		// 处理每行前缀 "> "
+		s = strings.TrimPrefix(s, "> ")
+		s = strings.ReplaceAll(s, "\n> ", "\n")
+		return strings.TrimSpace(s)
+	}
+
+	gopool.Go(func() {
+		for scanner.Scan() {
+			info.SetFirstResponseTime()
+			data := scanner.Text()
+			dataLine := strings.TrimSpace(data)
+			common.SysLog(dataLine)
+
+			if strings.HasPrefix(dataLine, "data: ") {
+				dataStr := strings.TrimPrefix(dataLine, "data: ")
+				if dataStr == "" {
+					continue
+				}
+
+				// 解析上游SSE数据
+				var upstreamData struct {
+					Type string `json:"type"`
+					Data struct {
+						DeltaContent string `json:"delta_content"`
+						Phase        string `json:"phase"`
+						Done         bool   `json:"done"`
+						Usage        struct {
+							PromptTokens     int `json:"prompt_tokens"`
+							CompletionTokens int `json:"completion_tokens"`
+							TotalTokens      int `json:"total_tokens"`
+						} `json:"usage,omitempty"`
+						Error *struct {
+							Detail string `json:"detail"`
+							Code   int    `json:"code"`
+						} `json:"error,omitempty"`
+						Inner *struct {
+							Error *struct {
+								Detail string `json:"detail"`
+								Code   int    `json:"code"`
+							} `json:"error,omitempty"`
+						} `json:"data,omitempty"`
+					} `json:"data"`
+					Error *struct {
+						Detail string `json:"detail"`
+						Code   int    `json:"code"`
+					} `json:"error,omitempty"`
+				}
+
+				err := json.Unmarshal([]byte(dataStr), &upstreamData)
+				if err != nil {
+					common.SysLog("SSE数据解析失败: " + err.Error())
+					continue
+				}
+
+				// 错误检测
+				if upstreamData.Error != nil || upstreamData.Data.Error != nil ||
+					(upstreamData.Data.Inner != nil && upstreamData.Data.Inner.Error != nil) {
+					errObj := upstreamData.Error
+					if errObj == nil {
+						errObj = upstreamData.Data.Error
+					}
+					if errObj == nil && upstreamData.Data.Inner != nil {
+						errObj = upstreamData.Data.Inner.Error
+					}
+					common.SysLog(fmt.Sprintf("上游错误: code=%d, detail=%s", errObj.Code, errObj.Detail))
+					stopChan <- true
+					return
+				}
+
+				// 处理内容
+				if upstreamData.Data.DeltaContent != "" {
+					out := upstreamData.Data.DeltaContent
+					if upstreamData.Data.Phase == "thinking" {
+						out = transformThinking(out)
+					}
+
+					if out != "" {
+						respArr = append(respArr, out)
+						var choice dto.ChatCompletionsStreamResponseChoice
+						choice.Delta.SetContentString(out)
+						var responseTemp dto.ChatCompletionsStreamResponse
+						responseTemp.Object = "chat.completion.chunk"
+						responseTemp.Model = info.UpstreamModelName
+						responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+						responseTemp.Id = responseId
+						responseTemp.Created = common.GetTimestamp()
+						dataNew, err := json.Marshal(responseTemp)
+						if err != nil {
+							common.SysError("error marshalling stream response: " + err.Error())
+							stopChan <- true
+							return
+						}
+						dataChan <- string(dataNew)
+					}
+				}
+
+				// 检查是否结束
+				if upstreamData.Data.Done || upstreamData.Data.Phase == "done" {
+					stopChan <- true
+					return
+				}
+			}
+		}
+		stopChan <- true
+	})
+
+	helper.SetEventStreamHeaders(c)
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case data := <-dataChan:
+			c.Render(-1, common.CustomEvent{Data: "data: " + data})
+			return true
+		case <-stopChan:
+			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+			return false
+		}
+	})
+
+	err := resp.Body.Close()
+	if err != nil {
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "close_response_body_failed",
+			Type:    "zai_error",
+			Param:   "",
+			Code:    "close_response_body_failed",
+		}, http.StatusInternalServerError), nil
+	}
+
+	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      info.PromptTokens + completionTokens,
+	}
+
+	return nil, &usage
+}
+
+func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+	var respArr []string
+
+	// 思考内容处理策略
+	transformThinking := func(s string) string {
+		// 去除 <summary>…</summary>
+		re := regexp.MustCompile(`(?s)<summary>.*?</summary>`)
+		s = re.ReplaceAllString(s, "")
+		// 清理残留自定义标签
+		s = strings.ReplaceAll(s, "</thinking>", "")
+		s = strings.ReplaceAll(s, "<Full>", "")
+		s = strings.ReplaceAll(s, "</Full>", "")
+		s = strings.TrimSpace(s)
+
+		// 根据策略处理 <details> 标签
+		switch "strip" { // 对应 THINK_TAGS_MODE
+		case "think":
+			re := regexp.MustCompile(`<details[^>]*>`)
+			s = re.ReplaceAllString(s, "<think>")
+			s = strings.ReplaceAll(s, "</details>", "</think>")
+		case "strip":
+			re := regexp.MustCompile(`<details[^>]*>`)
+			s = re.ReplaceAllString(s, "")
+			s = strings.ReplaceAll(s, "</details>", "")
+		}
+
+		// 处理每行前缀 "> "
+		s = strings.TrimPrefix(s, "> ")
+		s = strings.ReplaceAll(s, "\n> ", "\n")
+		return strings.TrimSpace(s)
+	}
+
+	for scanner.Scan() {
+		info.SetFirstResponseTime()
+		data := scanner.Text()
+		dataLine := strings.TrimSpace(data)
+		common.SysLog(dataLine)
+
+		if strings.HasPrefix(dataLine, "data: ") {
+			dataStr := strings.TrimPrefix(dataLine, "data: ")
+			if dataStr == "" {
+				continue
+			}
+
+			// 解析上游SSE数据
+			var upstreamData struct {
+				Type string `json:"type"`
+				Data struct {
+					DeltaContent string `json:"delta_content"`
+					Phase        string `json:"phase"`
+					Done         bool   `json:"done"`
+					Usage        struct {
+						PromptTokens     int `json:"prompt_tokens"`
+						CompletionTokens int `json:"completion_tokens"`
+						TotalTokens      int `json:"total_tokens"`
+					} `json:"usage,omitempty"`
+					Error *struct {
+						Detail string `json:"detail"`
+						Code   int    `json:"code"`
+					} `json:"error,omitempty"`
+					Inner *struct {
+						Error *struct {
+							Detail string `json:"detail"`
+							Code   int    `json:"code"`
+						} `json:"error,omitempty"`
+					} `json:"data,omitempty"`
+				} `json:"data"`
+				Error *struct {
+					Detail string `json:"detail"`
+					Code   int    `json:"code"`
+				} `json:"error,omitempty"`
+			}
+
+			err := json.Unmarshal([]byte(dataStr), &upstreamData)
+			if err != nil {
+				common.SysLog("SSE数据解析失败: " + err.Error())
+				continue
+			}
+
+			// 错误检测
+			if upstreamData.Error != nil || upstreamData.Data.Error != nil ||
+				(upstreamData.Data.Inner != nil && upstreamData.Data.Inner.Error != nil) {
+				errObj := upstreamData.Error
+				if errObj == nil {
+					errObj = upstreamData.Data.Error
+				}
+				if errObj == nil && upstreamData.Data.Inner != nil {
+					errObj = upstreamData.Data.Inner.Error
+				}
+				common.SysLog(fmt.Sprintf("上游错误: code=%d, detail=%s", errObj.Code, errObj.Detail))
+				break
+			}
+
+			// 处理内容
+			if upstreamData.Data.DeltaContent != "" {
+				out := upstreamData.Data.DeltaContent
+				if upstreamData.Data.Phase == "thinking" {
+					out = transformThinking(out)
+				}
+
+				if out != "" {
+					respArr = append(respArr, out)
+				}
+			}
+
+			// 检查是否结束
+			if upstreamData.Data.Done || upstreamData.Data.Phase == "done" {
+				break
+			}
+		}
+	}
+
+	responseText := strings.Join(respArr, "")
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+
+	// 构造完整响应
+	content, _ := json.Marshal(responseText)
+	choice := dto.OpenAITextResponseChoice{
+		Index: 0,
+		Message: dto.Message{
+			Role:    "assistant",
+			Content: content,
+		},
+		FinishReason: "stop",
+	}
+
+	fullTextResponse := dto.OpenAITextResponse{
+		Id:      responseId,
+		Object:  "chat.completion",
+		Created: common.GetTimestamp(),
+		Model:   info.UpstreamModelName,
+		Choices: []dto.OpenAITextResponseChoice{choice},
+	}
+
+	completionTokens := service.CountTextToken(responseText, info.UpstreamModelName)
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      info.PromptTokens + completionTokens,
+	}
+	fullTextResponse.Usage = usage
+
+	jsonResponse, err := json.Marshal(fullTextResponse)
+	if err != nil {
+		return types.WithOpenAIError(types.OpenAIError{
+			Message: "marshal_response_body_failed",
+			Type:    "zai_error",
+			Param:   "",
+			Code:    "marshal_response_body_failed",
+		}, http.StatusInternalServerError), nil
+	}
+
+	c.Writer.Header().Set("Content-Type", "application/json")
+	c.Writer.WriteHeader(resp.StatusCode)
+	_, err = c.Writer.Write(jsonResponse)
+
+	return nil, &usage
+}

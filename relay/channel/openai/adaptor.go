@@ -166,6 +166,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return info.ChannelBaseUrl, nil
 	case constant.ChannelTypeAILS: //GetMerlin
 		return "https://arcane.getmerlin.in/v1/thread/unified", nil
+	case constant.ChannelType360: //zai
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/api/chat/completions", info.ChannelType), nil
 	case constant.ChannelTypeMiniMax:
 		return minimax.GetRequestURL(info)
 	case constant.ChannelTypeCustom:
@@ -212,6 +214,11 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		GetMerlinToken := GetMerlinToken(info.ApiKey)
 		//common.SysLog("GetMerlinToken: " + GetMerlinToken)
 		GetMerlinBaseHeader(header, GetMerlinToken)
+		return nil
+	}
+	//zai
+	if info.ChannelType == constant.ChannelType360 {
+		GenZaiHeader(header, info)
 		return nil
 	}
 	if info.ChannelType == constant.ChannelTypeOpenAI && "" != info.Organization {
@@ -632,6 +639,10 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 				}
 			}
 		}
+		//zai
+		if info.ChannelType == constant.ChannelType360 {
+			requestBody = GenZaiBody(requestBody, info)
+		}
 
 		return channel.DoApiRequest(a, c, info, requestBody)
 	}
@@ -671,6 +682,14 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 				err, usage = GetMerlinStreamHandler(c, resp, info)
 			} else {
 				err, usage = GetMerlinHandler(c, resp, info)
+			}
+			return
+		}
+		if info.ChannelType == constant.ChannelType360 {
+			if info.IsStream {
+				err, usage = ZaiStreamHandler(c, resp, info)
+			} else {
+				err, usage = ZaiHandler(c, resp, info)
 			}
 			return
 		}
