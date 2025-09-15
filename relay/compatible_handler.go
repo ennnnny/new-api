@@ -157,7 +157,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		//notdiamond
-		if info.ChannelType == constant.ChannelTypeOhMyGPT {
+		if info.ChannelType == constant.ChannelTypeOhMyGPT || info.ChannelType == constant.ChannelType360 {
 		} else {
 			info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		}

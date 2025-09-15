@@ -1142,16 +1142,19 @@ func processZaiContentByPhase(content string, phase string) string {
 						if currentHistoryPhase == "thinking" {
 							content = fmt.Sprintf("\n\n</think>\n\n%s", strings.TrimLeft(after, " \t\n"))
 						} else if currentHistoryPhase == "answer" {
-							// 修复：当已经在answer阶段时，直接返回内容，不要清空
-							content = strings.TrimLeft(after, " \t\n")
+							// 当已经在answer阶段时，返回空字符串（与Python版本保持一致）
+							content = ""
 						}
 					} else {
 						content = "\n\n</think>"
 					}
 				} else {
-					// 修复：如果没有匹配到think标签，且当前是answer阶段，直接返回原内容
-					if currentHistoryPhase == "answer" {
-						// 保持原内容不变
+					// 关键修复：如果没有匹配到think标签，且从thinking转换到answer阶段，需要主动插入</think>标签
+					if currentHistoryPhase == "thinking" {
+						// 从thinking转换到answer，插入关闭标签并保留原内容
+						content = fmt.Sprintf("\n\n</think>\n\n%s", content)
+					} else if currentHistoryPhase == "answer" {
+						// 已经在answer阶段，保持原内容不变
 					}
 				}
 			}
@@ -1173,21 +1176,24 @@ func processZaiContentByPhase(content string, phase string) string {
 						if currentHistoryPhase == "thinking" {
 							content = fmt.Sprintf("\n\n%s", strings.TrimLeft(after, " \t\n"))
 						} else if currentHistoryPhase == "answer" {
-							// 修复：当已经在answer阶段时，直接返回内容，不要清空
-							content = strings.TrimLeft(after, " \t\n")
+							// 当已经在answer阶段时，返回空字符串（与Python版本保持一致）
+							content = ""
 						}
 					} else {
-						// 修复：如果没有after内容，且当前是answer阶段，保持原内容
+						// 如果没有after内容
 						if currentHistoryPhase == "answer" {
-							// 保持原内容不变
+							// 已经在answer阶段，保持原内容不变
 						} else {
 							content = ""
 						}
 					}
 				} else {
-					// 修复：如果没有匹配到details标签，且当前是answer阶段，直接返回原内容
-					if currentHistoryPhase == "answer" {
+					// 关键修复：如果没有匹配到details标签，且从thinking转换到answer阶段，需要主动处理
+					if currentHistoryPhase == "thinking" {
+						// 从thinking转换到answer，保留原内容（pure模式不需要插入关闭标签）
 						// 保持原内容不变
+					} else if currentHistoryPhase == "answer" {
+						// 已经在answer阶段，保持原内容不变
 					}
 				}
 			}
@@ -1212,8 +1218,8 @@ func processZaiContentByPhase(content string, phase string) string {
 						if currentHistoryPhase == "thinking" {
 							content = fmt.Sprintf("\n\n</details>\n\n%s", strings.TrimLeft(after, " \t\n"))
 						} else if currentHistoryPhase == "answer" {
-							// 修复：当已经在answer阶段时，直接返回内容，不要清空
-							content = strings.TrimLeft(after, " \t\n")
+							// 当已经在answer阶段时，返回空字符串（与Python版本保持一致）
+							content = ""
 						}
 					} else {
 						// 处理 duration 和 summary
@@ -1226,6 +1232,14 @@ func processZaiContentByPhase(content string, phase string) string {
 						} else {
 							content = "\n\n</div></details>"
 						}
+					}
+				} else {
+					// 关键修复：如果没有匹配到details标签，且从thinking转换到answer阶段，需要主动处理
+					if currentHistoryPhase == "thinking" {
+						// 从thinking转换到answer，插入关闭标签并保留原内容
+						content = fmt.Sprintf("\n\n</div></details>\n\n%s", content)
+					} else if currentHistoryPhase == "answer" {
+						// 已经在answer阶段，保持原内容不变
 					}
 				}
 			}
@@ -2384,8 +2398,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 		message.Content = nil // OpenAI 规范：有工具调用时 content 必须为 null
 		message.SetToolCalls(toolCalls)
 	} else {
-		content, _ := json.Marshal(responseText)
-		message.Content = content
+		message.Content = responseText
 	}
 
 	choice := dto.OpenAITextResponseChoice{
