@@ -1104,6 +1104,27 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 
 //GetMerlin End
 
+// extractContentAfterDetailsTag 提取 </details> 标签后的内容
+func extractContentAfterDetailsTag(content string) string {
+	// 查找 </details> 标签的位置
+	detailsEndIndex := strings.Index(content, "</details>")
+	if detailsEndIndex == -1 {
+		// 如果没有找到 </details> 标签，返回原内容
+		return content
+	}
+
+	// 提取 </details> 标签后的内容
+	afterDetailsIndex := detailsEndIndex + len("</details>")
+	if afterDetailsIndex >= len(content) {
+		// 如果 </details> 后没有内容，返回空字符串
+		return ""
+	}
+
+	// 返回 </details> 标签后的内容，去除前导空白字符
+	afterContent := content[afterDetailsIndex:]
+	return strings.TrimLeft(afterContent, " \t\n\r")
+}
+
 // processZaiContentByPhase 统一的思考内容处理函数，参考 app.py 的 process_content_by_phase
 func processZaiContentByPhase(content string, phase string) string {
 	currentHistoryPhase := getHistoryPhase()
@@ -1141,6 +1162,7 @@ func processZaiContentByPhase(content string, phase string) string {
 					if strings.TrimSpace(after) != "" {
 						if currentHistoryPhase == "thinking" {
 							content = fmt.Sprintf("\n\n</think>\n\n%s", strings.TrimLeft(after, " \t\n"))
+
 						} else if currentHistoryPhase == "answer" {
 							// 当已经在answer阶段时，返回空字符串（与Python版本保持一致）
 							content = ""
@@ -1686,8 +1708,9 @@ func processZaiMessagesWithTools(messagesArray []interface{}, tools []map[string
 			toolContent := contentZaiToString(msg["content"])
 
 			finalMessages = append(finalMessages, map[string]interface{}{
-				"role":    "assistant",
-				"content": fmt.Sprintf("工具 %s 返回结果:\n```json\n%s\n```", toolName, toolContent),
+				"role": "user",
+				//"content": fmt.Sprintf("工具 %s 返回结果:\n```json\n%s\n```", toolName, toolContent),
+				"content": fmt.Sprintf("Here is the result of mcp tool use `%s`: %s", toolName, toolContent),
 			})
 		} else {
 			// 处理其他消息
@@ -1888,9 +1911,24 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 
 	// 决定是否启用思考功能 - 优先使用请求参数，否则使用模型默认配置
 	enableThinking := modelConfig.Capabilities.Thinking
-	if thinkingVal, ok := requestMap["enable_thinking"]; ok {
+
+	// 通过判断requestMap里的thinking参数来决定是否启用思考功能
+	if thinkingVal, ok := requestMap["thinking"]; ok {
+		// 支持布尔值格式
 		if thinkingBool, ok := thinkingVal.(bool); ok {
 			enableThinking = thinkingBool
+		} else if thinkingMap, ok := thinkingVal.(map[string]interface{}); ok {
+			// 支持对象格式，检查thinking.type字段
+			if thinkingType, exists := thinkingMap["type"]; exists {
+				if typeStr, ok := thinkingType.(string); ok {
+					// 如果type为"disabled"，则禁用思考功能
+					if typeStr == "disabled" {
+						enableThinking = false
+					} else if typeStr == "enabled" {
+						enableThinking = true
+					}
+				}
+			}
 		}
 	}
 
@@ -2023,9 +2061,13 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if req, ok := info.Request.(*dto.GeneralOpenAIRequest); ok {
 		hasTools = len(req.Tools) > 0 && req.ToolChoice != "none"
 	}
+
+	// 动态缓冲模式：初始基于请求参数，后续基于响应内容动态调整
 	bufferingOnly := functionCallEnabled && hasTools
+	var detectedToolCall bool // 标记是否在响应中检测到工具调用
 
 	gopool.Go(func() {
+		setHistoryPhase("")
 		for scanner.Scan() {
 			info.SetFirstResponseTime()
 			data := scanner.Text()
@@ -2043,6 +2085,7 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					Type string `json:"type"`
 					Data struct {
 						DeltaContent string `json:"delta_content"`
+						EditContent  string `json:"edit_content"`
 						Phase        string `json:"phase"`
 						Done         bool   `json:"done"`
 						Usage        struct {
@@ -2089,20 +2132,49 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 				}
 
 				// 处理内容
+				var rawContent string
+				if upstreamData.Data.EditContent != "" && upstreamData.Data.Phase == "answer" {
+					// 提取 </details> 标签后的内容
+					rawContent = extractContentAfterDetailsTag(upstreamData.Data.EditContent)
+				}
 				if upstreamData.Data.DeltaContent != "" {
-					out := upstreamData.Data.DeltaContent
-					// 使用统一的思考内容处理函数
-					out = processZaiContentByPhase(out, upstreamData.Data.Phase)
+					rawContent = upstreamData.Data.DeltaContent
+				}
+				if rawContent != "" {
+					// 动态检测工具调用：检查原始内容是否包含工具调用标签
+					if functionCallEnabled && !detectedToolCall {
+						if strings.Contains(rawContent, "<tool_use>") || strings.Contains(rawContent, "<name>") {
+							detectedToolCall = true
+							bufferingOnly = true
+							common.SysLog("检测到工具调用标签，切换到缓冲模式")
+						}
+					}
 
 					if bufferingOnly {
+						currentHistoryPhase := getHistoryPhase()
+						if currentHistoryPhase == "thinking" && upstreamData.Data.Phase == "answer" {
+							setHistoryPhase(upstreamData.Data.Phase)
+							switch thinkTagsMode {
+							case "think":
+								accContent += "\n\n</think>"
+							case "raw":
+								accContent += "\n\n</div></details>"
+							}
+							if !strings.Contains(accContent, "<tool_use>") && strings.Contains(rawContent, "<name>") {
+								accContent += "<tool_use>"
+							}
+						}
 						// 工具模式：全程缓冲 - 参考 app.py 的 buffering_only 逻辑
-						accContent += out
+						// 关键修复：累积原始内容用于工具调用检测，避免工具调用标签被清理
+						accContent += rawContent
 					} else {
+						// 使用统一的思考内容处理函数处理显示内容
+						processedContent := processZaiContentByPhase(rawContent, upstreamData.Data.Phase)
 						// 非工具模式：直接流式输出
-						if out != "" {
-							respArr = append(respArr, out)
+						if processedContent != "" {
+							respArr = append(respArr, processedContent)
 							var choice dto.ChatCompletionsStreamResponseChoice
-							choice.Delta.SetContentString(out)
+							choice.Delta.SetContentString(processedContent)
 							var responseTemp dto.ChatCompletionsStreamResponse
 							responseTemp.Object = "chat.completion.chunk"
 							responseTemp.Model = info.UpstreamModelName
@@ -2270,7 +2342,9 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	var respArr []string
+	var rawContentArr []string // 用于保存原始内容进行工具调用检测
 
+	setHistoryPhase("")
 	for scanner.Scan() {
 		info.SetFirstResponseTime()
 		data := scanner.Text()
@@ -2288,6 +2362,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 				Type string `json:"type"`
 				Data struct {
 					DeltaContent string `json:"delta_content"`
+					EditContent  string `json:"edit_content"`
 					Phase        string `json:"phase"`
 					Done         bool   `json:"done"`
 					Usage        struct {
@@ -2333,16 +2408,27 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 			}
 
 			// 处理内容
+			var rawContent string
+			if upstreamData.Data.EditContent != "" && upstreamData.Data.Phase == "answer" {
+				// 提取 </details> 标签后的内容
+				rawContent = extractContentAfterDetailsTag(upstreamData.Data.EditContent)
+			}
 			if upstreamData.Data.DeltaContent != "" {
-				out := upstreamData.Data.DeltaContent
+				rawContent = upstreamData.Data.DeltaContent
+			}
+			if rawContent != "" {
 				// 添加调试日志
-				common.SysLog(fmt.Sprintf("ZaiHandler - 原始内容: %s, 阶段: %s", out, upstreamData.Data.Phase))
-				// 使用统一的思考内容处理函数
-				out = processZaiContentByPhase(out, upstreamData.Data.Phase)
-				common.SysLog(fmt.Sprintf("ZaiHandler - 处理后内容: %s", out))
+				common.SysLog(fmt.Sprintf("ZaiHandler - 原始内容: %s, 阶段: %s", rawContent, upstreamData.Data.Phase))
 
-				if out != "" {
-					respArr = append(respArr, out)
+				// 保存原始内容用于工具调用检测
+				rawContentArr = append(rawContentArr, rawContent)
+
+				// 使用统一的思考内容处理函数处理显示内容
+				processedContent := processZaiContentByPhase(rawContent, upstreamData.Data.Phase)
+				common.SysLog(fmt.Sprintf("ZaiHandler - 处理后内容: %s", processedContent))
+
+				if processedContent != "" {
+					respArr = append(respArr, processedContent)
 				}
 			}
 
@@ -2354,10 +2440,12 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	}
 
 	responseText := strings.Join(respArr, "")
+	rawResponseText := strings.Join(rawContentArr, "") // 原始内容用于工具调用检测
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 
 	// 添加调试日志
 	common.SysLog(fmt.Sprintf("ZaiHandler - 最终响应文本长度: %d, 内容: %s", len(responseText), responseText))
+	common.SysLog(fmt.Sprintf("ZaiHandler - 原始响应文本长度: %d, 内容: %s", len(rawResponseText), rawResponseText))
 
 	// 工具调用处理 - 参考 app.py 的非流式处理逻辑
 	var toolCalls []dto.ToolCallResponse
@@ -2371,7 +2459,8 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	}
 
 	if functionCallEnabled && hasTools {
-		extractedToolCalls := tryExtractToolCalls(responseText)
+		// 关键修复：使用原始内容进行工具调用检测
+		extractedToolCalls := tryExtractToolCalls(rawResponseText)
 		if extractedToolCalls != nil && len(extractedToolCalls) > 0 {
 			// 转换为 ToolCallResponse 格式
 			for _, tc := range extractedToolCalls {
@@ -2385,7 +2474,9 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 				})
 			}
 			// content 必须为 null（OpenAI 规范）- 参考 app.py 的处理
-			responseText = stripToolJsonFromText(responseText)
+			// 关键修复：从原始内容中清理工具调用，然后重新处理为显示内容
+			cleanedRawText := stripToolJsonFromText(rawResponseText)
+			responseText = processZaiContentByPhase(cleanedRawText, "answer")
 			finishReason = "tool_calls"
 		}
 	}
@@ -2451,6 +2542,35 @@ func tryExtractToolCalls(text string) []dto.ToolCallRequest {
 	sample := text
 	if len(text) > maxScanLength {
 		sample = text[:maxScanLength]
+	}
+
+	// 0. 优先尝试匹配 XML 格式的工具调用（Claude/Anthropic 格式）
+	xmlToolRegex := regexp.MustCompile(`(?s)<tool_use>\s*<name>(.*?)</name>\s*<arguments>(.*?)</arguments>\s*</tool_use>`)
+	xmlMatches := xmlToolRegex.FindAllStringSubmatch(sample, -1)
+	if len(xmlMatches) > 0 {
+		var result []dto.ToolCallRequest
+		for _, match := range xmlMatches {
+			if len(match) > 2 {
+				toolName := strings.TrimSpace(match[1])
+				argsStr := strings.TrimSpace(match[2])
+
+				// 验证参数是否为有效 JSON
+				var argsObj interface{}
+				if err := json.Unmarshal([]byte(argsStr), &argsObj); err == nil {
+					result = append(result, dto.ToolCallRequest{
+						ID:   generateCallID(),
+						Type: "function",
+						Function: dto.FunctionRequest{
+							Name:      toolName,
+							Arguments: argsStr,
+						},
+					})
+				}
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
 	}
 
 	// 1. 尝试匹配 ```json 代码块中的工具调用
@@ -2565,8 +2685,12 @@ func parseToolCallsFromInterface(toolCallsArray []interface{}) []dto.ToolCallReq
 	return result
 }
 
-// stripToolJsonFromText 从文本中移除工具调用相关的 JSON - 参考 app.py 的 strip_tool_json_from_text
+// stripToolJsonFromText 从文本中移除工具调用相关的 JSON 和 XML - 参考 app.py 的 strip_tool_json_from_text
 func stripToolJsonFromText(text string) string {
+	// 优先移除 XML 格式的工具调用
+	xmlToolRegex := regexp.MustCompile(`(?s)<tool_use>\s*<name>.*?</name>\s*<arguments>.*?</arguments>\s*</tool_use>`)
+	text = xmlToolRegex.ReplaceAllString(text, "")
+
 	// 移除 ```json 代码块中包含 tool_calls 的部分
 	jsonFenceRegex := regexp.MustCompile(`(?s)` + "```json\\s*(\\{.*?\\})\\s*```")
 	text = jsonFenceRegex.ReplaceAllStringFunc(text, func(match string) string {
