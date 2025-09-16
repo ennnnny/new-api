@@ -1125,12 +1125,12 @@ func extractContentAfterDetailsTag(content string) string {
 	return strings.TrimLeft(afterContent, " \t\n\r")
 }
 
-// processZaiContentByPhase 统一的思考内容处理函数，参考 app.py 的 process_content_by_phase
+// processZaiContentByPhase 统一的思考内容处理函数
 func processZaiContentByPhase(content string, phase string) string {
 	currentHistoryPhase := getHistoryPhase()
 
 	// 添加调试日志
-	common.SysLog(fmt.Sprintf("processZaiContentByPhase - 当前历史阶段: %s, 输入阶段: %s, 内容长度: %d", currentHistoryPhase, phase, len(content)))
+	//common.SysLog(fmt.Sprintf("processZaiContentByPhase - 当前历史阶段: %s, 输入阶段: %s, 内容长度: %d", currentHistoryPhase, phase, len(content)))
 
 	if content != "" && (phase == "thinking" || phase == "answer" || strings.Contains(content, "summary>")) {
 		// 基础清理：移除 details 标签内容和残留标签
@@ -1286,7 +1286,7 @@ func processZaiContentByPhase(content string, phase string) string {
 	setHistoryPhase(phase)
 
 	// 添加调试日志
-	common.SysLog(fmt.Sprintf("processZaiContentByPhase - 最终输出内容长度: %d", len(content)))
+	//common.SysLog(fmt.Sprintf("processZaiContentByPhase - 最终输出内容长度: %d", len(content)))
 
 	return content
 }
@@ -1453,7 +1453,7 @@ func normalizeZaiModelID(modelID string) string {
 	return normalized
 }
 
-// formatZaiToolsForPrompt 格式化工具为提示文本 - 参考 app.py 的 format_tools_for_prompt
+// formatZaiToolsForPrompt 格式化工具为提示文本
 func formatZaiToolsForPrompt(tools []map[string]interface{}) string {
 	if len(tools) == 0 {
 		return ""
@@ -1533,7 +1533,7 @@ func formatZaiToolsForPrompt(tools []map[string]interface{}) string {
 		"```\n"
 }
 
-// appendZaiTextToContent 向内容追加文本 - 参考 app.py 的 _append_text_to_content
+// appendZaiTextToContent 向内容追加文本
 func appendZaiTextToContent(orig interface{}, extra string) interface{} {
 	if origStr, ok := orig.(string); ok {
 		return origStr + extra
@@ -1566,7 +1566,7 @@ func appendZaiTextToContent(orig interface{}, extra string) interface{} {
 	return extra
 }
 
-// contentZaiToString 将内容转换为字符串 - 参考 app.py 的 _content_to_str
+// contentZaiToString 将内容转换为字符串
 func contentZaiToString(content interface{}) string {
 	if contentStr, ok := content.(string); ok {
 		return contentStr
@@ -1591,12 +1591,12 @@ func contentZaiToString(content interface{}) string {
 	return ""
 }
 
-// processZaiMessagesWithTools 处理带工具的消息 - 参考 app.py 的 process_messages_with_tools
+// processZaiMessagesWithTools 处理带工具的消息
 func processZaiMessagesWithTools(messagesArray []interface{}, tools []map[string]interface{}, toolChoice interface{}, modelConfig *ModelZaiConfig) []map[string]interface{} {
 	var processed []map[string]interface{}
 
 	// 检查是否启用工具调用且有工具
-	functionCallEnabled := true // 对应 app.py 的 FUNCTION_CALL_ENABLED
+	functionCallEnabled := true
 	hasTools := len(tools) > 0
 	toolChoiceNotNone := true
 
@@ -1874,7 +1874,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		modelConfig = &SUPPORTED_Z_MODELS[0]
 	}
 
-	// 处理工具调用和消息 - 参考 app.py 的 process_messages_with_tools
+	// 处理工具调用和消息
 	var messages []map[string]interface{}
 	var tools []map[string]interface{}
 	var toolChoice interface{}
@@ -1898,14 +1898,14 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	if messagesVal, ok := requestMap["messages"]; ok {
 		if messagesArray, ok := messagesVal.([]interface{}); ok {
 			// 添加调试日志
-			common.SysLog(fmt.Sprintf("GenZaiBody - 原始消息数量: %d, 工具数量: %d, tool_choice: %v",
-				len(messagesArray), len(tools), toolChoice))
+			//common.SysLog(fmt.Sprintf("GenZaiBody - 原始消息数量: %d, 工具数量: %d, tool_choice: %v",
+			//	len(messagesArray), len(tools), toolChoice))
 
 			processedMessages := processZaiMessagesWithTools(messagesArray, tools, toolChoice, modelConfig)
 			messages = processedMessages
 
 			// 添加调试日志
-			common.SysLog(fmt.Sprintf("GenZaiBody - 处理后消息数量: %d", len(messages)))
+			//common.SysLog(fmt.Sprintf("GenZaiBody - 处理后消息数量: %d", len(messages)))
 		}
 	}
 
@@ -2051,10 +2051,10 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	dataChan := make(chan string)
 	stopChan := make(chan bool)
 
-	// 工具调用相关变量 - 参考 app.py 的流式处理逻辑
+	// 工具调用相关变量
 	var toolCalls []dto.ToolCallResponse
 	accContent := ""
-	functionCallEnabled := true // 对应 app.py 的 FUNCTION_CALL_ENABLED
+	functionCallEnabled := true
 
 	// 从请求中获取工具信息
 	var hasTools bool
@@ -2164,7 +2164,7 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 								accContent += "<tool_use>"
 							}
 						}
-						// 工具模式：全程缓冲 - 参考 app.py 的 buffering_only 逻辑
+						// 工具模式：全程缓冲
 						// 关键修复：累积原始内容用于工具调用检测，避免工具调用标签被清理
 						accContent += rawContent
 					} else {
@@ -2192,10 +2192,10 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					}
 				}
 
-				// 检查是否结束 - 参考 app.py 的结束处理逻辑
+				// 检查是否结束
 				if upstreamData.Data.Done || upstreamData.Data.Phase == "done" {
 					if bufferingOnly {
-						// 尝试提取工具调用 - 参考 app.py 的 try_extract_tool_calls
+						// 尝试提取工具调用
 						extractedToolCalls := tryExtractToolCalls(accContent)
 						if extractedToolCalls != nil && len(extractedToolCalls) > 0 {
 							// 转换为 ToolCallResponse 格式
@@ -2261,7 +2261,7 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 
 	helper.SetEventStreamHeaders(c)
 
-	// 发送首块：role - 参考 app.py 的 first_chunk 逻辑
+	// 发送首块：role
 	firstChunk := dto.ChatCompletionsStreamResponse{
 		Id:      responseId,
 		Object:  "chat.completion.chunk",
@@ -2285,7 +2285,7 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			c.Render(-1, common.CustomEvent{Data: "data: " + data})
 			return true
 		case <-stopChan:
-			// 发送最终的 finish_reason chunk - 参考 app.py 的 tail 处理
+			// 发送最终的 finish_reason chunk
 			finishReason := "stop"
 			if len(toolCalls) > 0 {
 				finishReason = "tool_calls"
@@ -2418,14 +2418,14 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 			}
 			if rawContent != "" {
 				// 添加调试日志
-				common.SysLog(fmt.Sprintf("ZaiHandler - 原始内容: %s, 阶段: %s", rawContent, upstreamData.Data.Phase))
+				//common.SysLog(fmt.Sprintf("ZaiHandler - 原始内容: %s, 阶段: %s", rawContent, upstreamData.Data.Phase))
 
 				// 保存原始内容用于工具调用检测
 				rawContentArr = append(rawContentArr, rawContent)
 
 				// 使用统一的思考内容处理函数处理显示内容
 				processedContent := processZaiContentByPhase(rawContent, upstreamData.Data.Phase)
-				common.SysLog(fmt.Sprintf("ZaiHandler - 处理后内容: %s", processedContent))
+				//common.SysLog(fmt.Sprintf("ZaiHandler - 处理后内容: %s", processedContent))
 
 				if processedContent != "" {
 					respArr = append(respArr, processedContent)
@@ -2447,10 +2447,10 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	common.SysLog(fmt.Sprintf("ZaiHandler - 最终响应文本长度: %d, 内容: %s", len(responseText), responseText))
 	common.SysLog(fmt.Sprintf("ZaiHandler - 原始响应文本长度: %d, 内容: %s", len(rawResponseText), rawResponseText))
 
-	// 工具调用处理 - 参考 app.py 的非流式处理逻辑
+	// 工具调用处理
 	var toolCalls []dto.ToolCallResponse
 	finishReason := "stop"
-	functionCallEnabled := true // 对应 app.py 的 FUNCTION_CALL_ENABLED
+	functionCallEnabled := true
 
 	// 从请求中获取工具信息
 	var hasTools bool
@@ -2473,7 +2473,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 					},
 				})
 			}
-			// content 必须为 null（OpenAI 规范）- 参考 app.py 的处理
+			// content 必须为 null（OpenAI 规范）
 			// 关键修复：从原始内容中清理工具调用，然后重新处理为显示内容
 			cleanedRawText := stripToolJsonFromText(rawResponseText)
 			responseText = processZaiContentByPhase(cleanedRawText, "answer")
@@ -2481,7 +2481,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 		}
 	}
 
-	// 构造消息对象 - 参考 app.py 的 message 构造
+	// 构造消息对象
 	var message dto.Message
 	message.Role = "assistant"
 
@@ -2531,7 +2531,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	return nil, &usage
 }
 
-// tryExtractToolCalls 尝试从文本中提取工具调用 - 参考 app.py 的 try_extract_tool_calls
+// tryExtractToolCalls 尝试从文本中提取工具调用
 func tryExtractToolCalls(text string) []dto.ToolCallRequest {
 	if text == "" {
 		return nil
@@ -2685,7 +2685,7 @@ func parseToolCallsFromInterface(toolCallsArray []interface{}) []dto.ToolCallReq
 	return result
 }
 
-// stripToolJsonFromText 从文本中移除工具调用相关的 JSON 和 XML - 参考 app.py 的 strip_tool_json_from_text
+// stripToolJsonFromText 从文本中移除工具调用相关的 JSON 和 XML
 func stripToolJsonFromText(text string) string {
 	// 优先移除 XML 格式的工具调用
 	xmlToolRegex := regexp.MustCompile(`(?s)<tool_use>\s*<name>.*?</name>\s*<arguments>.*?</arguments>\s*</tool_use>`)
@@ -2714,7 +2714,7 @@ func stripToolJsonFromText(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// generateCallID 生成工具调用 ID - 参考 app.py 的 now_ns_id
+// generateCallID 生成工具调用 ID
 func generateCallID() string {
 	return fmt.Sprintf("call_%d", time.Now().UnixNano())
 }

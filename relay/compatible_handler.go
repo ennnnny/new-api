@@ -141,7 +141,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 
-		logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
+		//logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
 
 		requestBody = bytes.NewBuffer(jsonData)
 	}
@@ -156,8 +156,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		//notdiamond
+		//notdiamond / zai
 		if info.ChannelType == constant.ChannelTypeOhMyGPT || info.ChannelType == constant.ChannelType360 {
+			if httpResp.StatusCode != http.StatusOK {
+				newZaiApiErr := types.NewError(fmt.Errorf("upstream_error"), types.ErrorCodeBadResponseStatusCode)
+				service.ResetStatusCode(newZaiApiErr, statusCodeMappingStr)
+				return newZaiApiErr
+			}
 		} else {
 			info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		}
