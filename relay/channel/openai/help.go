@@ -2043,218 +2043,268 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	return bytes.NewReader(upstreamBytes)
 }
 
+// ZaiProcessorState 处理器状态
+type ZaiProcessorState struct {
+	currentId     string
+	currentModel  string
+	hasToolCall   bool
+	toolArgs      string
+	toolId        string
+	toolCallUsage *dto.Usage
+	contentIndex  int
+	hasThinking   bool
+	isStream      bool
+	result        *dto.OpenAITextResponse
+	controller    chan string
+	encoder       func(string) []byte
+}
+
+// processZaiLine 统一的 Zai 数据处理方法，基于 zai.js 的 processLine 方法
+func processZaiLine(line string, state *ZaiProcessorState) {
+	common.SysLog(line)
+
+	if !strings.HasPrefix(line, "data:") {
+		return
+	}
+
+	chunkStr := strings.TrimSpace(line[5:])
+	if chunkStr == "" {
+		return
+	}
+
+	var chunk struct {
+		Type string `json:"type"`
+		Data struct {
+			Id           string     `json:"id"`
+			Model        string     `json:"model"`
+			Phase        string     `json:"phase"`
+			EditContent  string     `json:"edit_content"`
+			DeltaContent string     `json:"delta_content"`
+			Usage        *dto.Usage `json:"usage"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal([]byte(chunkStr), &chunk); err != nil {
+		return
+	}
+
+	if chunk.Type != "chat:completion" {
+		return
+	}
+
+	data := chunk.Data
+
+	// 保存ID和模型信息
+	if data.Id != "" {
+		state.currentId = data.Id
+	}
+	if data.Model != "" {
+		state.currentModel = data.Model
+	}
+
+	switch data.Phase {
+	case "tool_call":
+		processZaiToolCall(data, state)
+	case "other":
+		processZaiOther(data, state)
+	case "thinking":
+		processZaiThinking(data, state)
+	case "answer":
+		processZaiAnswer(data, state)
+	}
+}
+
+// processZaiToolCall 处理工具调用阶段
+func processZaiToolCall(data struct {
+	Id           string     `json:"id"`
+	Model        string     `json:"model"`
+	Phase        string     `json:"phase"`
+	EditContent  string     `json:"edit_content"`
+	DeltaContent string     `json:"delta_content"`
+	Usage        *dto.Usage `json:"usage"`
+}, state *ZaiProcessorState) {
+	if !state.hasToolCall {
+		state.hasToolCall = true
+	}
+
+	// 解析 <glm_block> 内容
+	blocks := strings.Split(data.EditContent, "<glm_block >")
+	for index, block := range blocks {
+		if !strings.Contains(block, "</glm_block>") {
+			continue
+		}
+
+		if index == 0 {
+			// 第一个块，提取参数开始部分
+			resultIndex := strings.Index(data.EditContent, `"result`)
+			if resultIndex > 3 {
+				state.toolArgs += data.EditContent[:resultIndex-3]
+			}
+		} else {
+			// 处理之前的工具调用
+			if state.toolId != "" {
+				state.toolArgs += `"`
+				if params, err := parseToolParams(state.toolArgs); err == nil {
+					sendToolCallDelta(state, params, false)
+				} else {
+					common.SysLog("解析错误: " + state.toolArgs)
+				}
+				state.toolArgs = ""
+				state.toolId = ""
+			}
+
+			state.contentIndex++
+
+			// 解析新的工具调用
+			content := parseGlmBlock(block)
+			if content != nil {
+				state.toolId = content.ID
+				if argsJson, err := json.Marshal(content.Arguments); err == nil {
+					argsStr := string(argsJson)
+					if len(argsStr) > 0 {
+						state.toolArgs += argsStr[:len(argsStr)-1] // 移除最后的 }
+					}
+				}
+
+				// 发送工具调用开始
+				sendToolCallStart(state, content.Name)
+			}
+		}
+	}
+}
+
+// processZaiOther 处理其他阶段
+func processZaiOther(data struct {
+	Id           string     `json:"id"`
+	Model        string     `json:"model"`
+	Phase        string     `json:"phase"`
+	EditContent  string     `json:"edit_content"`
+	DeltaContent string     `json:"delta_content"`
+	Usage        *dto.Usage `json:"usage"`
+}, state *ZaiProcessorState) {
+	if state.hasToolCall && data.Usage != nil {
+		state.toolCallUsage = data.Usage
+	}
+
+	if state.hasToolCall && strings.HasPrefix(data.EditContent, "null,") {
+		state.toolArgs += `"`
+		state.hasToolCall = false
+
+		if params, err := parseToolParams(state.toolArgs); err == nil {
+			sendToolCallDelta(state, params, true)
+			sendToolCallFinish(state)
+		} else {
+			common.SysLog("错误: " + state.toolArgs)
+		}
+	}
+}
+
+// processZaiThinking 处理思考阶段
+func processZaiThinking(data struct {
+	Id           string     `json:"id"`
+	Model        string     `json:"model"`
+	Phase        string     `json:"phase"`
+	EditContent  string     `json:"edit_content"`
+	DeltaContent string     `json:"delta_content"`
+	Usage        *dto.Usage `json:"usage"`
+}, state *ZaiProcessorState) {
+	if !state.hasThinking {
+		state.hasThinking = true
+	}
+
+	if data.DeltaContent != "" {
+		content := data.DeltaContent
+		if strings.HasPrefix(content, "<details") {
+			parts := strings.Split(content, "</summary>\n>")
+			if len(parts) > 1 {
+				content = strings.TrimSpace(parts[len(parts)-1])
+			}
+		}
+
+		if state.isStream {
+			sendThinkingDelta(state, content)
+		} else {
+			// 非流式模式，累积思考内容
+			if state.result.Choices[0].Message.Thinking == nil {
+				state.result.Choices[0].Message.Thinking = &dto.ThinkingContent{Content: content}
+			} else {
+				state.result.Choices[0].Message.Thinking.Content += content
+			}
+		}
+	}
+}
+
+// processZaiAnswer 处理回答阶段
+func processZaiAnswer(data struct {
+	Id           string     `json:"id"`
+	Model        string     `json:"model"`
+	Phase        string     `json:"phase"`
+	EditContent  string     `json:"edit_content"`
+	DeltaContent string     `json:"delta_content"`
+	Usage        *dto.Usage `json:"usage"`
+}, state *ZaiProcessorState) {
+	if !state.hasToolCall {
+		// 处理思考结束
+		if data.EditContent != "" && strings.Contains(data.EditContent, "</details>\n") {
+			if state.hasThinking {
+				signature := fmt.Sprintf("%d", time.Now().Unix())
+				if state.isStream {
+					sendThinkingSignature(state, signature)
+					state.contentIndex++
+				} else if state.result.Choices[0].Message.Thinking != nil {
+					state.result.Choices[0].Message.Thinking.Signature = signature
+				}
+			}
+
+			// 提取 </details> 后的内容
+			parts := strings.Split(data.EditContent, "</details>\n")
+			if len(parts) > 1 {
+				content := parts[len(parts)-1]
+				if content != "" {
+					sendContentDelta(state, content)
+				}
+			}
+		}
+
+		// 处理增量内容
+		if data.DeltaContent != "" {
+			sendContentDelta(state, data.DeltaContent)
+		}
+
+		// 处理结束
+		if data.Usage != nil && !state.hasToolCall {
+			if state.isStream {
+				sendFinishDelta(state, "stop", data.Usage)
+			} else {
+				state.result.Choices[0].FinishReason = "stop"
+				state.result.Usage = *data.Usage
+			}
+		}
+	}
+}
+
 func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
-	var respArr []string
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	dataChan := make(chan string)
 	stopChan := make(chan bool)
 
-	// 工具调用相关变量
-	var toolCalls []dto.ToolCallResponse
-	accContent := ""
-	functionCallEnabled := true
-
-	// 从请求中获取工具信息
-	var hasTools bool
-	if req, ok := info.Request.(*dto.GeneralOpenAIRequest); ok {
-		hasTools = len(req.Tools) > 0 && req.ToolChoice != "none"
+	// 初始化处理器状态
+	state := &ZaiProcessorState{
+		currentModel: info.UpstreamModelName,
+		isStream:     true,
+		controller:   dataChan,
+		encoder: func(s string) []byte {
+			return []byte(s)
+		},
 	}
 
-	// 动态缓冲模式：初始基于请求参数，后续基于响应内容动态调整
-	bufferingOnly := functionCallEnabled && hasTools
-	var detectedToolCall bool // 标记是否在响应中检测到工具调用
-
 	gopool.Go(func() {
-		setHistoryPhase("")
 		for scanner.Scan() {
 			info.SetFirstResponseTime()
-			data := scanner.Text()
-			dataLine := strings.TrimSpace(data)
-			common.SysLog(dataLine)
-
-			if strings.HasPrefix(dataLine, "data: ") {
-				dataStr := strings.TrimPrefix(dataLine, "data: ")
-				if dataStr == "" {
-					continue
-				}
-
-				// 解析上游SSE数据
-				var upstreamData struct {
-					Type string `json:"type"`
-					Data struct {
-						DeltaContent string `json:"delta_content"`
-						EditContent  string `json:"edit_content"`
-						Phase        string `json:"phase"`
-						Done         bool   `json:"done"`
-						Usage        struct {
-							PromptTokens     int `json:"prompt_tokens"`
-							CompletionTokens int `json:"completion_tokens"`
-							TotalTokens      int `json:"total_tokens"`
-						} `json:"usage,omitempty"`
-						Error *struct {
-							Detail string `json:"detail"`
-							Code   int    `json:"code"`
-						} `json:"error,omitempty"`
-						Inner *struct {
-							Error *struct {
-								Detail string `json:"detail"`
-								Code   int    `json:"code"`
-							} `json:"error,omitempty"`
-						} `json:"data,omitempty"`
-					} `json:"data"`
-					Error *struct {
-						Detail string `json:"detail"`
-						Code   int    `json:"code"`
-					} `json:"error,omitempty"`
-				}
-
-				err := json.Unmarshal([]byte(dataStr), &upstreamData)
-				if err != nil {
-					common.SysLog("SSE数据解析失败: " + err.Error())
-					continue
-				}
-
-				// 错误检测
-				if upstreamData.Error != nil || upstreamData.Data.Error != nil ||
-					(upstreamData.Data.Inner != nil && upstreamData.Data.Inner.Error != nil) {
-					errObj := upstreamData.Error
-					if errObj == nil {
-						errObj = upstreamData.Data.Error
-					}
-					if errObj == nil && upstreamData.Data.Inner != nil {
-						errObj = upstreamData.Data.Inner.Error
-					}
-					common.SysLog(fmt.Sprintf("上游错误: code=%d, detail=%s", errObj.Code, errObj.Detail))
-					stopChan <- true
-					return
-				}
-
-				// 处理内容
-				var rawContent string
-				if upstreamData.Data.EditContent != "" && upstreamData.Data.Phase == "answer" {
-					// 提取 </details> 标签后的内容
-					rawContent = extractContentAfterDetailsTag(upstreamData.Data.EditContent)
-				}
-				if upstreamData.Data.DeltaContent != "" {
-					rawContent = upstreamData.Data.DeltaContent
-				}
-				if rawContent != "" {
-					// 动态检测工具调用：检查原始内容是否包含工具调用标签
-					if functionCallEnabled && !detectedToolCall {
-						if strings.Contains(rawContent, "<tool_use>") || strings.Contains(rawContent, "<name>") {
-							detectedToolCall = true
-							bufferingOnly = true
-							common.SysLog("检测到工具调用标签，切换到缓冲模式")
-						}
-					}
-
-					if bufferingOnly {
-						currentHistoryPhase := getHistoryPhase()
-						if currentHistoryPhase == "thinking" && upstreamData.Data.Phase == "answer" {
-							setHistoryPhase(upstreamData.Data.Phase)
-							switch thinkTagsMode {
-							case "think":
-								accContent += "\n\n</think>"
-							case "raw":
-								accContent += "\n\n</div></details>"
-							}
-							if !strings.Contains(accContent, "<tool_use>") && strings.Contains(rawContent, "<name>") {
-								accContent += "<tool_use>"
-							}
-						}
-						// 工具模式：全程缓冲
-						// 关键修复：累积原始内容用于工具调用检测，避免工具调用标签被清理
-						accContent += rawContent
-					} else {
-						// 使用统一的思考内容处理函数处理显示内容
-						processedContent := processZaiContentByPhase(rawContent, upstreamData.Data.Phase)
-						// 非工具模式：直接流式输出
-						if processedContent != "" {
-							respArr = append(respArr, processedContent)
-							var choice dto.ChatCompletionsStreamResponseChoice
-							choice.Delta.SetContentString(processedContent)
-							var responseTemp dto.ChatCompletionsStreamResponse
-							responseTemp.Object = "chat.completion.chunk"
-							responseTemp.Model = info.UpstreamModelName
-							responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
-							responseTemp.Id = responseId
-							responseTemp.Created = common.GetTimestamp()
-							dataNew, err := json.Marshal(responseTemp)
-							if err != nil {
-								common.SysError("error marshalling stream response: " + err.Error())
-								stopChan <- true
-								return
-							}
-							dataChan <- string(dataNew)
-						}
-					}
-				}
-
-				// 检查是否结束
-				if upstreamData.Data.Done || upstreamData.Data.Phase == "done" {
-					if bufferingOnly {
-						// 尝试提取工具调用
-						extractedToolCalls := tryExtractToolCalls(accContent)
-						if extractedToolCalls != nil && len(extractedToolCalls) > 0 {
-							// 转换为 ToolCallResponse 格式
-							var convertedToolCalls []dto.ToolCallResponse
-							for i, tc := range extractedToolCalls {
-								convertedToolCalls = append(convertedToolCalls, dto.ToolCallResponse{
-									Index: &i,
-									ID:    tc.ID,
-									Type:  tc.Type,
-									Function: dto.FunctionResponse{
-										Name:      tc.Function.Name,
-										Arguments: tc.Function.Arguments,
-									},
-								})
-							}
-
-							// 发送工具调用响应
-							var choice dto.ChatCompletionsStreamResponseChoice
-							choice.Delta.ToolCalls = convertedToolCalls
-							var responseTemp dto.ChatCompletionsStreamResponse
-							responseTemp.Object = "chat.completion.chunk"
-							responseTemp.Model = info.UpstreamModelName
-							responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
-							responseTemp.Id = responseId
-							responseTemp.Created = common.GetTimestamp()
-							dataNew, err := json.Marshal(responseTemp)
-							if err != nil {
-								common.SysError("error marshalling tool calls response: " + err.Error())
-								stopChan <- true
-								return
-							}
-							dataChan <- string(dataNew)
-							toolCalls = convertedToolCalls
-						} else {
-							// 没有工具调用，发送清理后的文本内容
-							trimmed := stripToolJsonFromText(accContent)
-							if trimmed != "" {
-								var choice dto.ChatCompletionsStreamResponseChoice
-								choice.Delta.SetContentString(trimmed)
-								var responseTemp dto.ChatCompletionsStreamResponse
-								responseTemp.Object = "chat.completion.chunk"
-								responseTemp.Model = info.UpstreamModelName
-								responseTemp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
-								responseTemp.Id = responseId
-								responseTemp.Created = common.GetTimestamp()
-								dataNew, err := json.Marshal(responseTemp)
-								if err != nil {
-									common.SysError("error marshalling content response: " + err.Error())
-									stopChan <- true
-									return
-								}
-								dataChan <- string(dataNew)
-							}
-						}
-					}
-					stopChan <- true
-					return
-				}
-			}
+			line := scanner.Text()
+			processZaiLine(line, state)
 		}
 		stopChan <- true
 	})
@@ -2285,26 +2335,6 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			c.Render(-1, common.CustomEvent{Data: "data: " + data})
 			return true
 		case <-stopChan:
-			// 发送最终的 finish_reason chunk
-			finishReason := "stop"
-			if len(toolCalls) > 0 {
-				finishReason = "tool_calls"
-			}
-
-			var finalChoice dto.ChatCompletionsStreamResponseChoice
-			finalChoice.FinishReason = &finishReason
-			var finalResponse dto.ChatCompletionsStreamResponse
-			finalResponse.Object = "chat.completion.chunk"
-			finalResponse.Model = info.UpstreamModelName
-			finalResponse.Choices = []dto.ChatCompletionsStreamResponseChoice{finalChoice}
-			finalResponse.Id = responseId
-			finalResponse.Created = common.GetTimestamp()
-
-			finalData, err := json.Marshal(finalResponse)
-			if err == nil {
-				c.Render(-1, common.CustomEvent{Data: "data: " + string(finalData)})
-			}
-
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
 			return false
 		}
@@ -2320,12 +2350,366 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		}, http.StatusInternalServerError), nil
 	}
 
-	// 计算 token 使用量 - 优先使用缓冲内容，否则使用响应数组
-	var finalContent string
-	if bufferingOnly {
-		finalContent = accContent
+	// 计算使用量
+	usage := dto.Usage{
+		PromptTokens:     info.PromptTokens,
+		CompletionTokens: 0, // 将在实际处理中更新
+		TotalTokens:      info.PromptTokens,
+	}
+	if state.toolCallUsage != nil {
+		usage = *state.toolCallUsage
+	}
+
+	return nil, &usage
+}
+
+// parseToolParams 解析工具参数
+func parseToolParams(toolArgs string) (interface{}, error) {
+	var params interface{}
+	err := json.Unmarshal([]byte(toolArgs), &params)
+	return params, err
+}
+
+// parseGlmBlock 解析 GLM 块内容
+func parseGlmBlock(block string) *struct {
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
+	Arguments map[string]interface{} `json:"arguments"`
+} {
+	// 移除 </glm_block> 标签
+	content := block[:len(block)-12]
+
+	var blockData struct {
+		Data struct {
+			Metadata struct {
+				ID        string                 `json:"id"`
+				Name      string                 `json:"name"`
+				Arguments map[string]interface{} `json:"arguments"`
+			} `json:"metadata"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal([]byte(content), &blockData); err != nil {
+		return nil
+	}
+
+	return &struct {
+		ID        string                 `json:"id"`
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}{
+		ID:        blockData.Data.Metadata.ID,
+		Name:      blockData.Data.Metadata.Name,
+		Arguments: blockData.Data.Metadata.Arguments,
+	}
+}
+
+// sendToolCallStart 发送工具调用开始
+func sendToolCallStart(state *ZaiProcessorState, name string) {
+	if !state.isStream {
+		// 非流式模式
+		existingToolCalls := state.result.Choices[0].Message.ParseToolCalls()
+		var toolCallRequests []dto.ToolCallRequest
+		for _, tc := range existingToolCalls {
+			toolCallRequests = append(toolCallRequests, dto.ToolCallRequest{
+				ID:   tc.ID,
+				Type: tc.Type,
+				Function: dto.FunctionRequest{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+		toolCallRequests = append(toolCallRequests, dto.ToolCallRequest{
+			ID:   state.toolId,
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:      name,
+				Arguments: "",
+			},
+		})
+		state.result.Choices[0].Message.SetToolCalls(toolCallRequests)
+		return
+	}
+
+	// 流式模式
+	startRes := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role: "assistant",
+				ToolCalls: []dto.ToolCallResponse{{
+					ID:   state.toolId,
+					Type: "function",
+					Function: dto.FunctionResponse{
+						Name:      name,
+						Arguments: "",
+					},
+				}},
+			},
+			FinishReason: nil,
+			Index:        state.contentIndex,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(startRes); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendToolCallDelta 发送工具调用参数
+func sendToolCallDelta(state *ZaiProcessorState, params interface{}, isFinish bool) {
+	if !state.isStream {
+		// 非流式模式
+		existingToolCalls := state.result.Choices[0].Message.ParseToolCalls()
+		if len(existingToolCalls) > 0 {
+			lastIdx := len(existingToolCalls) - 1
+			if argsJson, err := json.Marshal(params); err == nil {
+				existingToolCalls[lastIdx].Function.Arguments = string(argsJson)
+				state.result.Choices[0].Message.SetToolCalls(existingToolCalls)
+			}
+		}
+		return
+	}
+
+	// 流式模式
+	index := 0
+	if isFinish {
+		index = 0
 	} else {
-		finalContent = strings.Join(respArr, "")
+		index = state.contentIndex
+	}
+
+	deltaRes := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role: "assistant",
+				ToolCalls: []dto.ToolCallResponse{{
+					ID:   state.toolId,
+					Type: "function",
+					Function: dto.FunctionResponse{
+						Arguments: func() string {
+							if argsJson, err := json.Marshal(params); err == nil {
+								return string(argsJson)
+							}
+							return ""
+						}(),
+					},
+				}},
+			},
+			FinishReason: nil,
+			Index:        index,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(deltaRes); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendToolCallFinish 发送工具调用完成
+func sendToolCallFinish(state *ZaiProcessorState) {
+	if !state.isStream {
+		state.result.Usage = *state.toolCallUsage
+		state.result.Choices[0].FinishReason = "tool_calls"
+		return
+	}
+
+	// 发送工具调用完成
+	finishRes := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role:      "assistant",
+				ToolCalls: []dto.ToolCallResponse{},
+			},
+			FinishReason: stringPtr("tool_calls"),
+			Index:        0,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Usage:             state.toolCallUsage,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(finishRes); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendThinkingDelta 发送思考内容
+func sendThinkingDelta(state *ZaiProcessorState, content string) {
+	if !state.isStream {
+		return
+	}
+
+	msg := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role: "assistant",
+				Thinking: &dto.ThinkingContent{
+					Content: content,
+				},
+			},
+			FinishReason: nil,
+			Index:        0,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(msg); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendThinkingSignature 发送思考签名
+func sendThinkingSignature(state *ZaiProcessorState, signature string) {
+	if !state.isStream {
+		return
+	}
+
+	msg := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role: "assistant",
+				Thinking: &dto.ThinkingContent{
+					Content:   "",
+					Signature: signature,
+				},
+			},
+			FinishReason: nil,
+			Index:        0,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(msg); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendContentDelta 发送内容增量
+func sendContentDelta(state *ZaiProcessorState, content string) {
+	if !state.isStream {
+		if state.result.Choices[0].Message.Content == nil {
+			state.result.Choices[0].Message.Content = ""
+		}
+		if contentStr, ok := state.result.Choices[0].Message.Content.(string); ok {
+			state.result.Choices[0].Message.Content = contentStr + content
+		}
+		return
+	}
+
+	msg := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role:    "assistant",
+				Content: &content,
+			},
+			FinishReason: nil,
+			Index:        0,
+		}},
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(msg); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// sendFinishDelta 发送完成信号
+func sendFinishDelta(state *ZaiProcessorState, finishReason string, usage *dto.Usage) {
+	if !state.isStream {
+		return
+	}
+
+	msg := dto.ChatCompletionsStreamResponse{
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role:    "assistant",
+				Content: stringPtr(""),
+			},
+			FinishReason: &finishReason,
+			Index:        0,
+		}},
+		Usage:             usage,
+		Created:           common.GetTimestamp(),
+		Id:                state.currentId,
+		Model:             state.currentModel,
+		Object:            "chat.completion.chunk",
+		SystemFingerprint: stringPtr("fp_zai_001"),
+	}
+
+	if data, err := json.Marshal(msg); err == nil {
+		state.controller <- string(data)
+	}
+}
+
+// stringPtr 返回字符串指针
+func stringPtr(s string) *string {
+	return &s
+}
+
+func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
+	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Split(bufio.ScanLines)
+
+	// 初始化处理器状态
+	state := &ZaiProcessorState{
+		currentModel: info.UpstreamModelName,
+		isStream:     false,
+		result: &dto.OpenAITextResponse{
+			Id:      responseId,
+			Object:  "chat.completion",
+			Created: common.GetTimestamp(),
+			Model:   info.UpstreamModelName,
+			Choices: []dto.OpenAITextResponseChoice{{
+				Index: 0,
+				Message: dto.Message{
+					Role:    "assistant",
+					Content: "",
+				},
+				FinishReason: "stop",
+			}},
+		},
+	}
+
+	// 处理所有行
+	for scanner.Scan() {
+		info.SetFirstResponseTime()
+		line := scanner.Text()
+		processZaiLine(line, state)
+	}
+
+	// 计算使用量
+	var finalContent string
+	if state.result.Choices[0].Message.Content != nil {
+		if contentStr, ok := state.result.Choices[0].Message.Content.(string); ok {
+			finalContent = contentStr
+		}
 	}
 
 	completionTokens := service.CountTextToken(finalContent, info.UpstreamModelName)
@@ -2335,186 +2719,15 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		TotalTokens:      info.PromptTokens + completionTokens,
 	}
 
-	return nil, &usage
-}
-
-func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Split(bufio.ScanLines)
-	var respArr []string
-	var rawContentArr []string // 用于保存原始内容进行工具调用检测
-
-	setHistoryPhase("")
-	for scanner.Scan() {
-		info.SetFirstResponseTime()
-		data := scanner.Text()
-		dataLine := strings.TrimSpace(data)
-		common.SysLog(dataLine)
-
-		if strings.HasPrefix(dataLine, "data: ") {
-			dataStr := strings.TrimPrefix(dataLine, "data: ")
-			if dataStr == "" {
-				continue
-			}
-
-			// 解析上游SSE数据
-			var upstreamData struct {
-				Type string `json:"type"`
-				Data struct {
-					DeltaContent string `json:"delta_content"`
-					EditContent  string `json:"edit_content"`
-					Phase        string `json:"phase"`
-					Done         bool   `json:"done"`
-					Usage        struct {
-						PromptTokens     int `json:"prompt_tokens"`
-						CompletionTokens int `json:"completion_tokens"`
-						TotalTokens      int `json:"total_tokens"`
-					} `json:"usage,omitempty"`
-					Error *struct {
-						Detail string `json:"detail"`
-						Code   int    `json:"code"`
-					} `json:"error,omitempty"`
-					Inner *struct {
-						Error *struct {
-							Detail string `json:"detail"`
-							Code   int    `json:"code"`
-						} `json:"error,omitempty"`
-					} `json:"data,omitempty"`
-				} `json:"data"`
-				Error *struct {
-					Detail string `json:"detail"`
-					Code   int    `json:"code"`
-				} `json:"error,omitempty"`
-			}
-
-			err := json.Unmarshal([]byte(dataStr), &upstreamData)
-			if err != nil {
-				common.SysLog("SSE数据解析失败: " + err.Error())
-				continue
-			}
-
-			// 错误检测
-			if upstreamData.Error != nil || upstreamData.Data.Error != nil ||
-				(upstreamData.Data.Inner != nil && upstreamData.Data.Inner.Error != nil) {
-				errObj := upstreamData.Error
-				if errObj == nil {
-					errObj = upstreamData.Data.Error
-				}
-				if errObj == nil && upstreamData.Data.Inner != nil {
-					errObj = upstreamData.Data.Inner.Error
-				}
-				common.SysLog(fmt.Sprintf("上游错误: code=%d, detail=%s", errObj.Code, errObj.Detail))
-				break
-			}
-
-			// 处理内容
-			var rawContent string
-			if upstreamData.Data.EditContent != "" && upstreamData.Data.Phase == "answer" {
-				// 提取 </details> 标签后的内容
-				rawContent = extractContentAfterDetailsTag(upstreamData.Data.EditContent)
-			}
-			if upstreamData.Data.DeltaContent != "" {
-				rawContent = upstreamData.Data.DeltaContent
-			}
-			if rawContent != "" {
-				// 添加调试日志
-				//common.SysLog(fmt.Sprintf("ZaiHandler - 原始内容: %s, 阶段: %s", rawContent, upstreamData.Data.Phase))
-
-				// 保存原始内容用于工具调用检测
-				rawContentArr = append(rawContentArr, rawContent)
-
-				// 使用统一的思考内容处理函数处理显示内容
-				processedContent := processZaiContentByPhase(rawContent, upstreamData.Data.Phase)
-				//common.SysLog(fmt.Sprintf("ZaiHandler - 处理后内容: %s", processedContent))
-
-				if processedContent != "" {
-					respArr = append(respArr, processedContent)
-				}
-			}
-
-			// 检查是否结束
-			if upstreamData.Data.Done || upstreamData.Data.Phase == "done" {
-				break
-			}
-		}
-	}
-
-	responseText := strings.Join(respArr, "")
-	rawResponseText := strings.Join(rawContentArr, "") // 原始内容用于工具调用检测
-	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
-
-	// 添加调试日志
-	common.SysLog(fmt.Sprintf("ZaiHandler - 最终响应文本长度: %d, 内容: %s", len(responseText), responseText))
-	common.SysLog(fmt.Sprintf("ZaiHandler - 原始响应文本长度: %d, 内容: %s", len(rawResponseText), rawResponseText))
-
-	// 工具调用处理
-	var toolCalls []dto.ToolCallResponse
-	finishReason := "stop"
-	functionCallEnabled := true
-
-	// 从请求中获取工具信息
-	var hasTools bool
-	if req, ok := info.Request.(*dto.GeneralOpenAIRequest); ok {
-		hasTools = len(req.Tools) > 0 && req.ToolChoice != "none"
-	}
-
-	if functionCallEnabled && hasTools {
-		// 关键修复：使用原始内容进行工具调用检测
-		extractedToolCalls := tryExtractToolCalls(rawResponseText)
-		if extractedToolCalls != nil && len(extractedToolCalls) > 0 {
-			// 转换为 ToolCallResponse 格式
-			for _, tc := range extractedToolCalls {
-				toolCalls = append(toolCalls, dto.ToolCallResponse{
-					ID:   tc.ID,
-					Type: tc.Type,
-					Function: dto.FunctionResponse{
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				})
-			}
-			// content 必须为 null（OpenAI 规范）
-			// 关键修复：从原始内容中清理工具调用，然后重新处理为显示内容
-			cleanedRawText := stripToolJsonFromText(rawResponseText)
-			responseText = processZaiContentByPhase(cleanedRawText, "answer")
-			finishReason = "tool_calls"
-		}
-	}
-
-	// 构造消息对象
-	var message dto.Message
-	message.Role = "assistant"
-
-	if len(toolCalls) > 0 {
-		message.Content = nil // OpenAI 规范：有工具调用时 content 必须为 null
-		message.SetToolCalls(toolCalls)
+	// 如果有工具调用的使用量，优先使用
+	if state.toolCallUsage != nil {
+		usage = *state.toolCallUsage
 	} else {
-		message.Content = responseText
+		state.result.Usage = usage
 	}
 
-	choice := dto.OpenAITextResponseChoice{
-		Index:        0,
-		Message:      message,
-		FinishReason: finishReason,
-	}
-
-	fullTextResponse := dto.OpenAITextResponse{
-		Id:      responseId,
-		Object:  "chat.completion",
-		Created: common.GetTimestamp(),
-		Model:   info.UpstreamModelName,
-		Choices: []dto.OpenAITextResponseChoice{choice},
-	}
-
-	completionTokens := service.CountTextToken(responseText, info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
-	}
-	fullTextResponse.Usage = usage
-
-	jsonResponse, err := json.Marshal(fullTextResponse)
+	// 返回响应
+	jsonResponse, err := json.Marshal(state.result)
 	if err != nil {
 		return types.WithOpenAIError(types.OpenAIError{
 			Message: "marshal_response_body_failed",
