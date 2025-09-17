@@ -18,6 +18,7 @@ import (
 	"one-api/service"
 	"one-api/types"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2057,6 +2058,7 @@ type ZaiProcessorState struct {
 	result        *dto.OpenAITextResponse
 	controller    chan string
 	encoder       func(string) []byte
+	contentBuffer string // 用于累积内容以检测工具调用
 }
 
 // processZaiLine 统一的 Zai 数据处理方法，基于 zai.js 的 processLine 方法
@@ -2095,9 +2097,10 @@ func processZaiLine(line string, state *ZaiProcessorState) {
 	data := chunk.Data
 
 	// 保存ID和模型信息
-	if data.Id != "" {
-		state.currentId = data.Id
+	if data.Id == "" {
+		data.Id = fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	}
+	state.currentId = data.Id
 	if data.Model != "" {
 		state.currentModel = data.Model
 	}
@@ -2210,6 +2213,19 @@ func processZaiThinking(data struct {
 }, state *ZaiProcessorState) {
 	if !state.hasThinking {
 		state.hasThinking = true
+		// 思考开始时，发送开始标签
+		if state.isStream {
+			sendThinkingDelta(state, "<think>")
+		} else {
+			// 非流式模式，初始化思考内容和content字段
+			state.result.Choices[0].Message.Thinking = &dto.ThinkingContent{Content: "<think>"}
+			if state.result.Choices[0].Message.Content == nil {
+				state.result.Choices[0].Message.Content = ""
+			}
+			if contentStr, ok := state.result.Choices[0].Message.Content.(string); ok {
+				state.result.Choices[0].Message.Content = "<think>" + contentStr
+			}
+		}
 	}
 
 	if data.DeltaContent != "" {
@@ -2224,11 +2240,16 @@ func processZaiThinking(data struct {
 		if state.isStream {
 			sendThinkingDelta(state, content)
 		} else {
-			// 非流式模式，累积思考内容
+			// 非流式模式，累积思考内容到thinking字段和content字段
 			if state.result.Choices[0].Message.Thinking == nil {
 				state.result.Choices[0].Message.Thinking = &dto.ThinkingContent{Content: content}
 			} else {
 				state.result.Choices[0].Message.Thinking.Content += content
+			}
+
+			// 同时添加到content字段
+			if contentStr, ok := state.result.Choices[0].Message.Content.(string); ok {
+				state.result.Choices[0].Message.Content = contentStr + content
 			}
 		}
 	}
@@ -2247,6 +2268,19 @@ func processZaiAnswer(data struct {
 		// 处理思考结束
 		if data.EditContent != "" && strings.Contains(data.EditContent, "</details>\n") {
 			if state.hasThinking {
+				// 思考结束时，先发送结束标签
+				if state.isStream {
+					sendThinkingDelta(state, "</think>")
+				} else {
+					// 非流式模式，添加结束标签到thinking和content字段
+					if state.result.Choices[0].Message.Thinking != nil {
+						state.result.Choices[0].Message.Thinking.Content += "</think>"
+					}
+					if contentStr, ok := state.result.Choices[0].Message.Content.(string); ok {
+						state.result.Choices[0].Message.Content = contentStr + "</think>"
+					}
+				}
+
 				signature := fmt.Sprintf("%d", time.Now().Unix())
 				if state.isStream {
 					sendThinkingSignature(state, signature)
@@ -2266,13 +2300,28 @@ func processZaiAnswer(data struct {
 			}
 		}
 
-		// 处理增量内容
+		// 处理增量内容 - 检测工具调用
 		if data.DeltaContent != "" {
+			// 累积内容用于工具调用检测
+			state.contentBuffer += data.DeltaContent
+
+			// 检测是否包含工具调用
+			if detectAndProcessToolCall(state) {
+				// 如果检测到工具调用，不发送普通内容
+				return
+			}
+
+			// 否则发送普通内容
 			sendContentDelta(state, data.DeltaContent)
 		}
 
 		// 处理结束
 		if data.Usage != nil && !state.hasToolCall {
+			// 最后检查一次是否有完整的工具调用
+			if state.contentBuffer != "" {
+				detectAndProcessToolCall(state)
+			}
+
 			if state.isStream {
 				sendFinishDelta(state, "stop", data.Usage)
 			} else {
@@ -2560,6 +2609,7 @@ func sendThinkingDelta(state *ZaiProcessorState, content string) {
 				Thinking: &dto.ThinkingContent{
 					Content: content,
 				},
+				Content: &content, // 同时发送content字段
 			},
 			FinishReason: nil,
 			Index:        0,
@@ -2930,4 +2980,293 @@ func stripToolJsonFromText(text string) string {
 // generateCallID 生成工具调用 ID
 func generateCallID() string {
 	return fmt.Sprintf("call_%d", time.Now().UnixNano())
+}
+
+// detectAndProcessToolCall 检测并处理工具调用
+func detectAndProcessToolCall(state *ZaiProcessorState) bool {
+	// 检查是否包含工具调用的JSON结构
+	if !strings.Contains(state.contentBuffer, "tool_calls") {
+		return false
+	}
+
+	// 检查是否包含完整的JSON结构（包括可能的markdown代码块）
+	if !strings.Contains(state.contentBuffer, "}") {
+		return false
+	}
+
+	// 查找包含 tool_calls 的 JSON 对象
+	// 先找到 tool_calls 的位置，然后向前查找对应的开始括号
+	toolCallsIdx := strings.Index(state.contentBuffer, "tool_calls")
+	if toolCallsIdx == -1 {
+		return false
+	}
+
+	// 从 tool_calls 位置向前查找最近的 {
+	startIdx := -1
+	for i := toolCallsIdx; i >= 0; i-- {
+		if state.contentBuffer[i] == '{' {
+			// 检查这个 { 前面是否有其他字符（除了空白字符和换行）
+			hasNonWhitespace := false
+			for j := i - 1; j >= 0; j-- {
+				if state.contentBuffer[j] == '\n' || state.contentBuffer[j] == '\r' {
+					break
+				}
+				if state.contentBuffer[j] != ' ' && state.contentBuffer[j] != '\t' {
+					hasNonWhitespace = true
+					break
+				}
+			}
+			// 如果前面没有非空白字符，或者前面是换行，则认为这是JSON的开始
+			if !hasNonWhitespace {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	if startIdx == -1 {
+		return false
+	}
+
+	// 查找匹配的结束括号
+	braceCount := 0
+	endIdx := -1
+	for i := startIdx; i < len(state.contentBuffer); i++ {
+		switch state.contentBuffer[i] {
+		case '{':
+			braceCount++
+		case '}':
+			braceCount--
+			if braceCount == 0 {
+				endIdx = i
+				break
+			}
+		}
+	}
+
+	if endIdx == -1 {
+		// JSON不完整，继续累积
+		return false
+	}
+
+	// 检查JSON后面是否有```结束标记，如果有则等待完整
+	remainingContent := state.contentBuffer[endIdx+1:]
+	if strings.Contains(state.contentBuffer, "```json") && !strings.Contains(remainingContent, "```") {
+		// 在markdown代码块中但还没有结束标记，继续等待
+		return false
+	}
+
+	// 提取JSON字符串
+	jsonStr := state.contentBuffer[startIdx : endIdx+1]
+	common.SysLog("提取的JSON: " + jsonStr)
+
+	// 解析工具调用（增强容错）
+	type toolCallItem struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"function"`
+	}
+	var toolCallData struct {
+		ToolCalls []toolCallItem `json:"tool_calls"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &toolCallData); err != nil {
+		// 回退：使用通用 map 解析并复用 parseToolCallsFromInterface，尽量不丢工具调用
+		var generic map[string]interface{}
+		if err2 := json.Unmarshal([]byte(jsonStr), &generic); err2 != nil {
+			common.SysLog("解析工具调用JSON失败: " + err.Error() + ", JSON: " + jsonStr)
+			return false
+		}
+		if toolCallsAny, ok := generic["tool_calls"]; ok {
+			if toolCallsArray, ok := toolCallsAny.([]interface{}); ok {
+				// 提取JSON前的文本内容作为普通内容发送
+				if startIdx > 0 {
+					prefixContent := state.contentBuffer[:startIdx]
+					// 如果是markdown代码块，需要去掉```json标记
+					if strings.Contains(prefixContent, "```json") {
+						// 找到```json的位置，只保留之前的内容
+						jsonMarkIdx := strings.LastIndex(prefixContent, "```json")
+						if jsonMarkIdx > 0 {
+							prefixContent = prefixContent[:jsonMarkIdx]
+						} else {
+							prefixContent = ""
+						}
+					}
+					prefixContent = strings.TrimSpace(prefixContent)
+					if prefixContent != "" {
+						sendContentDelta(state, prefixContent)
+					}
+				}
+
+				calls := parseToolCallsFromInterface(toolCallsArray)
+				if len(calls) == 0 {
+					common.SysLog("解析工具调用JSON失败: tool_calls 为空或无法解析")
+					return false
+				}
+				state.hasToolCall = true
+				for _, call := range calls {
+					id := call.ID
+					if id == "" {
+						id = generateCallID()
+					}
+					// 默认 type=function（尽管 sendZaiToolCall 不使用 type，这里保持一致性）
+					if call.Type == "" {
+						call.Type = "function"
+					}
+					sendZaiToolCall(state, id, call.Function.Name, call.Function.Arguments)
+				}
+				// 发送工具调用完成
+				if state.isStream {
+					sendToolCallFinish(state)
+				} else {
+					state.result.Choices[0].FinishReason = "tool_calls"
+				}
+				// 清空缓冲区
+				state.contentBuffer = ""
+				return true
+			}
+		}
+		common.SysLog("解析工具调用JSON失败: 未找到有效的 tool_calls 字段, JSON: " + jsonStr)
+		return false
+	}
+
+	// 处理工具调用
+	if len(toolCallData.ToolCalls) > 0 {
+		state.hasToolCall = true
+
+		// 提取JSON前的文本内容作为普通内容发送
+		if startIdx > 0 {
+			prefixContent := state.contentBuffer[:startIdx]
+
+			// 如果是markdown代码块，需要去掉```json标记
+			if strings.Contains(prefixContent, "```json") {
+				// 找到```json的位置，只保留之前的内容
+				jsonMarkIdx := strings.LastIndex(prefixContent, "```json")
+				if jsonMarkIdx > 0 {
+					prefixContent = prefixContent[:jsonMarkIdx]
+				} else {
+					prefixContent = ""
+				}
+			}
+
+			prefixContent = strings.TrimSpace(prefixContent)
+			if prefixContent != "" {
+				sendContentDelta(state, prefixContent)
+			}
+		}
+
+		for _, tc := range toolCallData.ToolCalls {
+			// 统一处理 arguments，支持字符串或对象
+			var argsStr string
+			if len(tc.Function.Arguments) > 0 {
+				// 优先尝试解码为字符串（arguments 是 JSON 字符串）
+				var argAsStr string
+				if err := json.Unmarshal(tc.Function.Arguments, &argAsStr); err == nil {
+					argsStr = argAsStr
+				} else {
+					// 否则按原始 JSON 传递
+					argsStr = string(tc.Function.Arguments)
+				}
+			}
+			id := tc.ID
+			if id == "" {
+				id = generateCallID()
+			}
+			if tc.Type == "" {
+				tc.Type = "function"
+			}
+			// 发送工具调用
+			sendZaiToolCall(state, id, tc.Function.Name, argsStr)
+		}
+
+		// 发送工具调用完成
+		if state.isStream {
+			sendToolCallFinish(state)
+		} else {
+			state.result.Choices[0].FinishReason = "tool_calls"
+		}
+
+		// 清空缓冲区
+		state.contentBuffer = ""
+		return true
+	}
+
+	return false
+}
+
+// sendZaiToolCall 发送Z.AI格式的工具调用
+func sendZaiToolCall(state *ZaiProcessorState, id, name, arguments string) {
+	if !state.isStream {
+		// 非流式模式
+		existingToolCalls := state.result.Choices[0].Message.ParseToolCalls()
+		var toolCallRequests []dto.ToolCallRequest
+		for _, tc := range existingToolCalls {
+			toolCallRequests = append(toolCallRequests, dto.ToolCallRequest{
+				ID:   tc.ID,
+				Type: tc.Type,
+				Function: dto.FunctionRequest{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+
+		toolCallRequests = append(toolCallRequests, dto.ToolCallRequest{
+			ID:   id,
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:      name,
+				Arguments: arguments,
+			},
+		})
+
+		state.result.Choices[0].Message.SetToolCalls(toolCallRequests)
+		return
+	}
+
+	// 流式模式 - 发送工具调用开始
+	// id一般是call_x之类的，从id提取x
+	currentIndex := 0
+	indexTemp := strings.Split(id, "_")
+	if len(indexTemp) > 1 {
+		if index, err := strconv.Atoi(indexTemp[1]); err == nil {
+			currentIndex = index - 1
+		}
+	}
+	if currentIndex < 0 {
+		currentIndex = 0
+	}
+
+	startRes := dto.ChatCompletionsStreamResponse{
+		Id:      fmt.Sprintf("chatcmpl-%s", common.GetUUID()),
+		Object:  "chat.completion.chunk",
+		Created: common.GetTimestamp(),
+		Model:   state.currentModel,
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{
+				Index: state.contentIndex,
+				Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+					Role: "assistant",
+					ToolCalls: []dto.ToolCallResponse{
+						{
+							Index: &currentIndex,
+							ID:    id,
+							Type:  "function",
+							Function: dto.FunctionResponse{
+								Name:      name,
+								Arguments: arguments,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if data, err := json.Marshal(startRes); err == nil {
+		state.controller <- string(data)
+	}
 }
