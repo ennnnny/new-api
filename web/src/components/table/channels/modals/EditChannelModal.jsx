@@ -56,8 +56,10 @@ import {
 } from '../../../../helpers';
 import ModelSelectModal from './ModelSelectModal';
 import JSONEditor from '../../../common/ui/JSONEditor';
-import TwoFactorAuthModal from '../../../common/modals/TwoFactorAuthModal';
+import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
+import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
+import { createApiCalls } from '../../../../services/secureVerification';
 import {
   IconSave,
   IconClose,
@@ -84,6 +86,27 @@ const REGION_EXAMPLE = {
   'gemini-1.5-flash-002': 'europe-west2',
   'claude-3-5-sonnet-20240620': 'europe-west1',
 };
+
+// 支持并且已适配通过接口获取模型列表的渠道类型
+const MODEL_FETCHABLE_TYPES = new Set([
+  1,
+  4,
+  14,
+  34,
+  17,
+  26,
+  24,
+  47,
+  25,
+  20,
+  23,
+  31,
+  35,
+  40,
+  42,
+  48,
+  43,
+]);
 
 function type2secretPrompt(type) {
   // inputs.type === 15 ? '按照如下格式输入：APIKey|SecretKey' : (inputs.type === 18 ? '按照如下格式输入：APPID|APISecret|APIKey' : '请输入渠道对应的鉴权密钥')
@@ -144,6 +167,8 @@ const EditChannelModal = (props) => {
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
+    // 企业账户设置
+    is_enterprise_account: false,
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -169,42 +194,51 @@ const EditChannelModal = (props) => {
   const [channelSearchValue, setChannelSearchValue] = useState('');
   const [useManualInput, setUseManualInput] = useState(false); // 是否使用手动输入模式
   const [keyMode, setKeyMode] = useState('append'); // 密钥模式：replace（覆盖）或 append（追加）
+  const [isEnterpriseAccount, setIsEnterpriseAccount] = useState(false); // 是否为企业账户
 
-  // 2FA验证查看密钥相关状态
-  const [twoFAState, setTwoFAState] = useState({
+  // 密钥显示状态
+  const [keyDisplayState, setKeyDisplayState] = useState({
     showModal: false,
-    code: '',
-    loading: false,
-    showKey: false,
     keyData: '',
   });
 
-  // 专门的2FA验证状态（用于TwoFactorAuthModal）
-  const [show2FAVerifyModal, setShow2FAVerifyModal] = useState(false);
-  const [verifyCode, setVerifyCode] = useState('');
-  const [verifyLoading, setVerifyLoading] = useState(false);
+  // 使用通用安全验证 Hook
+  const {
+    isModalVisible,
+    verificationMethods,
+    verificationState,
+    withVerification,
+    executeVerification,
+    cancelVerification,
+    setVerificationCode,
+    switchVerificationMethod,
+  } = useSecureVerification({
+    onSuccess: (result) => {
+      // 验证成功后显示密钥
+      console.log('Verification success, result:', result);
+      if (result && result.success && result.data?.key) {
+        showSuccess(t('密钥获取成功'));
+        setKeyDisplayState({
+          showModal: true,
+          keyData: result.data.key,
+        });
+      } else if (result && result.key) {
+        // 直接返回了 key（没有包装在 data 中）
+        showSuccess(t('密钥获取成功'));
+        setKeyDisplayState({
+          showModal: true,
+          keyData: result.key,
+        });
+      }
+    },
+  });
 
-  // 2FA状态更新辅助函数
-  const updateTwoFAState = (updates) => {
-    setTwoFAState((prev) => ({ ...prev, ...updates }));
-  };
-
-  // 重置2FA状态
-  const resetTwoFAState = () => {
-    setTwoFAState({
+  // 重置密钥显示状态
+  const resetKeyDisplayState = () => {
+    setKeyDisplayState({
       showModal: false,
-      code: '',
-      loading: false,
-      showKey: false,
       keyData: '',
     });
-  };
-
-  // 重置2FA验证状态
-  const reset2FAVerifyState = () => {
-    setShow2FAVerifyModal(false);
-    setVerifyCode('');
-    setVerifyLoading(false);
   };
 
   // 渠道额外设置状态
@@ -215,7 +249,7 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     system_prompt: '',
   });
-  const showApiConfigCard = inputs.type !== 45; // 控制是否显示 API 配置卡片（仅当渠道类型不是 豆包 时显示）
+  const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
 
   // 处理渠道额外设置的更新
@@ -322,6 +356,10 @@ const EditChannelModal = (props) => {
         case 36:
           localModels = ['suno_music', 'suno_lyrics'];
           break;
+        case 45:
+          localModels = getChannelModels(value);
+          setInputs((prevInputs) => ({ ...prevInputs, base_url: 'https://ark.cn-beijing.volces.com' }));
+          break;
         default:
           localModels = getChannelModels(value);
           break;
@@ -413,15 +451,27 @@ const EditChannelModal = (props) => {
             parsedSettings.azure_responses_version || '';
           // 读取 Vertex 密钥格式
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
+          // 读取企业账户设置
+          data.is_enterprise_account = parsedSettings.openrouter_enterprise === true;
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
           data.region = '';
           data.vertex_key_type = 'json';
+          data.is_enterprise_account = false;
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
         data.vertex_key_type = 'json';
+        data.is_enterprise_account = false;
+      }
+
+      if (
+        data.type === 45 &&
+        (!data.base_url ||
+          (typeof data.base_url === 'string' && data.base_url.trim() === ''))
+      ) {
+        data.base_url = 'https://ark.cn-beijing.volces.com';
       }
 
       setInputs(data);
@@ -433,6 +483,8 @@ const EditChannelModal = (props) => {
       } else {
         setAutoBan(true);
       }
+      // 同步企业账户状态
+      setIsEnterpriseAccount(data.is_enterprise_account || false);
       setBasicModels(getChannelModels(data.type));
       // 同步更新channelSettings状态显示
       setChannelSettings({
@@ -561,40 +613,31 @@ const EditChannelModal = (props) => {
     }
   };
 
-  // 使用TwoFactorAuthModal的验证函数
-  const handleVerify2FA = async () => {
-    if (!verifyCode) {
-      showError(t('请输入验证码或备用码'));
-      return;
-    }
-
-    setVerifyLoading(true);
+  // 查看渠道密钥（透明验证）
+  const handleShow2FAModal = async () => {
     try {
-      const res = await API.post(`/api/channel/${channelId}/key`, {
-        code: verifyCode,
-      });
-      if (res.data.success) {
-        // 验证成功，显示密钥
-        updateTwoFAState({
+      // 使用 withVerification 包装，会自动处理需要验证的情况
+      const result = await withVerification(
+        createApiCalls.viewChannelKey(channelId),
+        {
+          title: t('查看渠道密钥'),
+          description: t('为了保护账户安全，请验证您的身份。'),
+          preferredMethod: 'passkey', // 优先使用 Passkey
+        }
+      );
+
+      // 如果直接返回了结果（已验证），显示密钥
+      if (result && result.success && result.data?.key) {
+        showSuccess(t('密钥获取成功'));
+        setKeyDisplayState({
           showModal: true,
-          showKey: true,
-          keyData: res.data.data.key,
+          keyData: result.data.key,
         });
-        reset2FAVerifyState();
-        showSuccess(t('验证成功'));
-      } else {
-        showError(res.data.message);
       }
     } catch (error) {
-      showError(t('获取密钥失败'));
-    } finally {
-      setVerifyLoading(false);
+      console.error('Failed to view channel key:', error);
+      showError(error.message || t('获取密钥失败'));
     }
-  };
-
-  // 显示2FA验证模态框 - 使用TwoFactorAuthModal
-  const handleShow2FAModal = () => {
-    setShow2FAVerifyModal(true);
   };
 
   useEffect(() => {
@@ -692,16 +735,16 @@ const EditChannelModal = (props) => {
     });
     // 重置密钥模式状态
     setKeyMode('append');
+    // 重置企业账户状态
+    setIsEnterpriseAccount(false);
     // 清空表单中的key_mode字段
     if (formApiRef.current) {
       formApiRef.current.setValue('key_mode', undefined);
     }
     // 重置本地输入，避免下次打开残留上一次的 JSON 字段值
     setInputs(getInitValues());
-    // 重置2FA状态
-    resetTwoFAState();
-    // 重置2FA验证状态
-    reset2FAVerifyState();
+    // 重置密钥显示状态
+    resetKeyDisplayState();
   };
 
   const handleVertexUploadChange = ({ fileList }) => {
@@ -802,7 +845,9 @@ const EditChannelModal = (props) => {
               delete localInputs.key;
             }
           } else {
-            localInputs.key = batch ? JSON.stringify(keys) : JSON.stringify(keys[0]);
+            localInputs.key = batch
+              ? JSON.stringify(keys)
+              : JSON.stringify(keys[0]);
           }
         }
       }
@@ -820,6 +865,10 @@ const EditChannelModal = (props) => {
     }
     if (!Array.isArray(localInputs.models) || localInputs.models.length === 0) {
       showInfo(t('请至少选择一个模型！'));
+      return;
+    }
+    if (localInputs.type === 45 && (!localInputs.base_url || localInputs.base_url.trim() === '')) {
+      showInfo(t('请输入API地址！'));
       return;
     }
     if (
@@ -851,6 +900,21 @@ const EditChannelModal = (props) => {
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
+    // 处理type === 20的企业账户设置
+    if (localInputs.type === 20) {
+      let settings = {};
+      if (localInputs.settings) {
+        try {
+          settings = JSON.parse(localInputs.settings);
+        } catch (error) {
+          console.error('解析settings失败:', error);
+        }
+      }
+      // 设置企业账户标识，无论是true还是false都要传到后端
+      settings.openrouter_enterprise = localInputs.is_enterprise_account === true;
+      localInputs.settings = JSON.stringify(settings);
+    }
+
     // 清理不需要发送到后端的字段
     delete localInputs.force_format;
     delete localInputs.thinking_to_content;
@@ -858,6 +922,7 @@ const EditChannelModal = (props) => {
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
+    delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
 
@@ -896,6 +961,56 @@ const EditChannelModal = (props) => {
       props.handleClose();
     } else {
       showError(message);
+    }
+  };
+
+  // 密钥去重函数
+  const deduplicateKeys = () => {
+    const currentKey = formApiRef.current?.getValue('key') || inputs.key || '';
+
+    if (!currentKey.trim()) {
+      showInfo(t('请先输入密钥'));
+      return;
+    }
+
+    // 按行分割密钥
+    const keyLines = currentKey.split('\n');
+    const beforeCount = keyLines.length;
+
+    // 使用哈希表去重，保持原有顺序
+    const keySet = new Set();
+    const deduplicatedKeys = [];
+
+    keyLines.forEach((line) => {
+      const trimmedLine = line.trim();
+      if (trimmedLine && !keySet.has(trimmedLine)) {
+        keySet.add(trimmedLine);
+        deduplicatedKeys.push(trimmedLine);
+      }
+    });
+
+    const afterCount = deduplicatedKeys.length;
+    const deduplicatedKeyText = deduplicatedKeys.join('\n');
+
+    // 更新表单和状态
+    if (formApiRef.current) {
+      formApiRef.current.setValue('key', deduplicatedKeyText);
+    }
+    handleInputChange('key', deduplicatedKeyText);
+
+    // 显示去重结果
+    const message = t(
+      '去重完成：去重前 {{before}} 个密钥，去重后 {{after}} 个密钥',
+      {
+        before: beforeCount,
+        after: afterCount,
+      },
+    );
+
+    if (beforeCount === afterCount) {
+      showInfo(t('未发现重复密钥'));
+    } else {
+      showSuccess(message);
     }
   };
 
@@ -994,24 +1109,41 @@ const EditChannelModal = (props) => {
         </Checkbox>
       )}
       {batch && (
-        <Checkbox
-          disabled={isEdit}
-          checked={multiToSingle}
-          onChange={() => {
-            setMultiToSingle((prev) => !prev);
-            setInputs((prev) => {
-              const newInputs = { ...prev };
-              if (!multiToSingle) {
-                newInputs.multi_key_mode = multiKeyMode;
-              } else {
-                delete newInputs.multi_key_mode;
-              }
-              return newInputs;
-            });
-          }}
-        >
-          {t('密钥聚合模式')}
-        </Checkbox>
+        <>
+          <Checkbox
+            disabled={isEdit}
+            checked={multiToSingle}
+            onChange={() => {
+              setMultiToSingle((prev) => {
+                const nextValue = !prev;
+                setInputs((prevInputs) => {
+                  const newInputs = { ...prevInputs };
+                  if (nextValue) {
+                    newInputs.multi_key_mode = multiKeyMode;
+                  } else {
+                    delete newInputs.multi_key_mode;
+                  }
+                  return newInputs;
+                });
+                return nextValue;
+              });
+            }}
+          >
+            {t('密钥聚合模式')}
+          </Checkbox>
+
+          {inputs.type !== 41 && (
+            <Button
+              size='small'
+              type='tertiary'
+              theme='outline'
+              onClick={deduplicateKeys}
+              style={{ textDecoration: 'underline' }}
+            >
+              {t('密钥去重')}
+            </Button>
+          )}
+        </>
       )}
     </Space>
   ) : null;
@@ -1175,6 +1307,21 @@ const EditChannelModal = (props) => {
                     onChange={(value) => handleInputChange('type', value)}
                   />
 
+                  {inputs.type === 20 && (
+                    <Form.Switch
+                      field='is_enterprise_account'
+                      label={t('是否为企业账户')}
+                      checkedText={t('是')}
+                      uncheckedText={t('否')}
+                      onChange={(value) => {
+                        setIsEnterpriseAccount(value);
+                        handleInputChange('is_enterprise_account', value);
+                      }}
+                      extraText={t('企业账户为特殊返回格式，需要特殊处理，如果非企业账户，请勿勾选')}
+                      initValue={inputs.is_enterprise_account}
+                    />
+                  )}
+
                   <Form.Input
                     field='name'
                     label={t('名称')}
@@ -1198,7 +1345,10 @@ const EditChannelModal = (props) => {
                       value={inputs.vertex_key_type || 'json'}
                       onChange={(value) => {
                         // 更新设置中的 vertex_key_type
-                        handleChannelOtherSettingsChange('vertex_key_type', value);
+                        handleChannelOtherSettingsChange(
+                          'vertex_key_type',
+                          value,
+                        );
                         // 切换为 api_key 时，关闭批量与手动/文件切换，并清理已选文件
                         if (value === 'api_key') {
                           setBatch(false);
@@ -1218,7 +1368,8 @@ const EditChannelModal = (props) => {
                     />
                   )}
                   {batch ? (
-                    inputs.type === 41 && (inputs.vertex_key_type || 'json') === 'json' ? (
+                    inputs.type === 41 &&
+                    (inputs.vertex_key_type || 'json') === 'json' ? (
                       <Form.Upload
                         field='vertex_files'
                         label={t('密钥文件 (.json)')}
@@ -1254,7 +1405,7 @@ const EditChannelModal = (props) => {
                         autoComplete='new-password'
                         onChange={(value) => handleInputChange('key', value)}
                         extraText={
-                          <div className='flex items-center gap-2'>
+                          <div className='flex items-center gap-2 flex-wrap'>
                             {isEdit &&
                               isMultiKeyChannel &&
                               keyMode === 'append' && (
@@ -1282,7 +1433,8 @@ const EditChannelModal = (props) => {
                     )
                   ) : (
                     <>
-                      {inputs.type === 41 && (inputs.vertex_key_type || 'json') === 'json' ? (
+                      {inputs.type === 41 &&
+                      (inputs.vertex_key_type || 'json') === 'json' ? (
                         <>
                           {!batch && (
                             <div className='flex items-center justify-between mb-3'>
@@ -1789,6 +1941,30 @@ const EditChannelModal = (props) => {
                         />
                       </div>
                     )}
+
+                    {inputs.type === 45 && (
+                        <div>
+                          <Form.Select
+                              field='base_url'
+                              label={t('API地址')}
+                              placeholder={t('请选择API地址')}
+                              onChange={(value) =>
+                                  handleInputChange('base_url', value)
+                              }
+                              optionList={[
+                                {
+                                  value: 'https://ark.cn-beijing.volces.com',
+                                  label: 'https://ark.cn-beijing.volces.com'
+                                },
+                                {
+                                  value: 'https://ark.ap-southeast.bytepluses.com',
+                                  label: 'https://ark.ap-southeast.bytepluses.com'
+                                }
+                              ]}
+                              defaultValue='https://ark.cn-beijing.volces.com'
+                          />
+                        </div>
+                    )}
                   </Card>
                 )}
 
@@ -1872,13 +2048,15 @@ const EditChannelModal = (props) => {
                         >
                           {t('填入所有模型')}
                         </Button>
-                        <Button
-                          size='small'
-                          type='tertiary'
-                          onClick={() => fetchUpstreamModelList('models')}
-                        >
-                          {t('获取模型列表')}
-                        </Button>
+                        {MODEL_FETCHABLE_TYPES.has(inputs.type) && (
+                          <Button
+                            size='small'
+                            type='tertiary'
+                            onClick={() => fetchUpstreamModelList('models')}
+                          >
+                            {t('获取模型列表')}
+                          </Button>
+                        )}
                         <Button
                           size='small'
                           type='warning'
@@ -2320,17 +2498,17 @@ const EditChannelModal = (props) => {
           onVisibleChange={(visible) => setIsModalOpenurl(visible)}
         />
       </SideSheet>
-      {/* 使用TwoFactorAuthModal组件进行2FA验证 */}
-      <TwoFactorAuthModal
-        visible={show2FAVerifyModal}
-        code={verifyCode}
-        loading={verifyLoading}
-        onCodeChange={setVerifyCode}
-        onVerify={handleVerify2FA}
-        onCancel={reset2FAVerifyState}
-        title={t('查看渠道密钥')}
-        description={t('为了保护账户安全，请验证您的两步验证码。')}
-        placeholder={t('请输入验证码或备用码')}
+      {/* 使用通用安全验证模态框 */}
+      <SecureVerificationModal
+        visible={isModalVisible}
+        verificationMethods={verificationMethods}
+        verificationState={verificationState}
+        onVerify={executeVerification}
+        onCancel={cancelVerification}
+        onCodeChange={setVerificationCode}
+        onMethodSwitch={switchVerificationMethod}
+        title={verificationState.title}
+        description={verificationState.description}
       />
 
       {/* 使用ChannelKeyDisplay组件显示密钥 */}
@@ -2353,10 +2531,10 @@ const EditChannelModal = (props) => {
             {t('渠道密钥信息')}
           </div>
         }
-        visible={twoFAState.showModal && twoFAState.showKey}
-        onCancel={resetTwoFAState}
+        visible={keyDisplayState.showModal}
+        onCancel={resetKeyDisplayState}
         footer={
-          <Button type='primary' onClick={resetTwoFAState}>
+          <Button type='primary' onClick={resetKeyDisplayState}>
             {t('完成')}
           </Button>
         }
@@ -2364,7 +2542,7 @@ const EditChannelModal = (props) => {
         style={{ maxWidth: '90vw' }}
       >
         <ChannelKeyDisplay
-          keyData={twoFAState.keyData}
+          keyData={keyDisplayState.keyData}
           showSuccessIcon={true}
           successText={t('密钥获取成功')}
           showWarning={true}
