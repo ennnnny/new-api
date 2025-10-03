@@ -167,7 +167,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	case constant.ChannelTypeAILS: //GetMerlin
 		return "https://arcane.getmerlin.in/v1/thread/unified", nil
 	case constant.ChannelType360: //zai
-		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/api/chat/completions", info.ChannelType), nil
+		return fmt.Sprintf("%v", info.HeadersOverride["full_url"]), nil
 	case constant.ChannelTypeMiniMax:
 		return minimax.GetRequestURL(info)
 	case constant.ChannelTypeCustom:
