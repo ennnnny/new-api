@@ -1385,6 +1385,25 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		}
 	}
 
+	if tools != nil {
+		messages = append(messages, map[string]interface{}{
+			"role": "user",
+			"content": "\n\n如果需要调用工具，请仅用以下结构体回复（确保标签完整闭合）:\n" +
+				"▶{\n" +
+				"  \"tool_calls\": [\n" +
+				"    {\n" +
+				"      \"id\": \"call_xxx\",\n" +
+				"      \"type\": \"function\",\n" +
+				"      \"function\": {\n" +
+				"        \"name\": \"function_name\",\n" +
+				"        \"arguments\": \"{\\\"param1\\\": \\\"value1\\\"}\"\n" +
+				"      }\n" +
+				"    }\n" +
+				"  ]\n" +
+				"}◀",
+		})
+	}
+
 	// 构造上游请求
 	upstreamReq := ZaiUpstreamRequest{
 		Stream:   true, // 总是使用流式从上游获取
@@ -1499,8 +1518,10 @@ func GenZaiHeader(c *http.Header, info *relaycommon.RelayInfo) {
 type zaiResponseContext struct {
 	allContent      strings.Builder
 	thinkingContent strings.Builder
+	toolCallContent strings.Builder
 	currentUsage    *dto.Usage
 	hasToolCall     bool
+	endToolCall     bool
 	hasThinking     bool
 	endThinking     bool
 	toolCalls       []dto.ToolCallResponse
@@ -1529,12 +1550,13 @@ type zaiToolCall struct {
 }
 
 // 创建流式响应的辅助函数
-func createStreamResponse(id string, created int64, model string, content string, role string, isFinish bool) *dto.ChatCompletionsStreamResponse {
+func createStreamResponse(id string, created int64, model string, content string, role string, isFinish bool, reason string) *dto.ChatCompletionsStreamResponse {
 	choice := dto.ChatCompletionsStreamResponseChoice{
 		Index: 0,
-		Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
-			Role: role,
-		},
+		Delta: dto.ChatCompletionsStreamResponseChoiceDelta{},
+	}
+	if role != "" {
+		choice.Delta.Role = role
 	}
 
 	if content != "" {
@@ -1542,8 +1564,12 @@ func createStreamResponse(id string, created int64, model string, content string
 	}
 
 	if isFinish {
-		finishReason := "stop"
-		choice.FinishReason = &finishReason
+		if reason != "" {
+			choice.FinishReason = &reason
+		} else {
+			finishReason := "stop"
+			choice.FinishReason = &finishReason
+		}
 	}
 
 	return &dto.ChatCompletionsStreamResponse{
@@ -1567,6 +1593,17 @@ type ZaiStreamData struct {
 	EditContent  string `json:"edit_content,omitempty"`
 	Phase        string `json:"phase"`
 	Done         bool   `json:"done"`
+}
+
+type ZaiSourceToolCallWrapper struct {
+	ToolCalls []struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
 }
 
 // 转换思考内容的通用函数
@@ -1597,11 +1634,18 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	allZai := &zaiResponseContext{}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
+	startDelimiter := "▶"
+	endDelimiter := "◀"
 
 	gopool.Go(func() {
 		defer func() {
 			stopChan <- true
 		}()
+
+		firstDeltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "", "assistant", false, "")
+		firstDataBytes, _ := json.Marshal(firstDeltaResp)
+		dataChan <- string(firstDataBytes)
+
 		for scanner.Scan() {
 			info.SetFirstResponseTime()
 			line := strings.TrimSpace(scanner.Text())
@@ -1629,13 +1673,13 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 						allZai.endThinking = false
 					}
 					allZai.hasThinking = true
-					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, cleaned, "assistant", false)
+					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, cleaned, "", false, "")
 					dataBytes, _ := json.Marshal(deltaResp)
 					dataChan <- string(dataBytes)
 				case "answer":
 					if allZai.hasThinking && !allZai.endThinking {
 						allZai.endThinking = true
-						deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "</think>", "assistant", false)
+						deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "</think>", "", false, "")
 						dataBytes, _ := json.Marshal(deltaResp)
 						dataChan <- string(dataBytes)
 					}
@@ -1645,16 +1689,51 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 						if parts := strings.SplitN(msg.Data.EditContent, separator, 2); len(parts) == 2 {
 							// The part after </details> is the first piece of the answer
 							currentAnswerContent = strings.TrimSpace(parts[1])
+						} else {
+							currentAnswerContent = msg.Data.EditContent
 						}
 					} else {
 						// This is a normal answer chunk
 						currentAnswerContent = msg.Data.DeltaContent
 					}
-					allZai.allContent.WriteString(currentAnswerContent)
-					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, currentAnswerContent, "assistant", false)
-					dataBytes, _ := json.Marshal(deltaResp)
-					dataChan <- string(dataBytes)
+
+					if strings.Contains(currentAnswerContent, startDelimiter) || strings.Contains(currentAnswerContent, endDelimiter) || (allZai.hasToolCall && !allZai.endToolCall) {
+						if strings.Contains(currentAnswerContent, startDelimiter) {
+							allZai.hasToolCall = true
+							allZai.endToolCall = false
+							if parts := strings.SplitN(currentAnswerContent, startDelimiter, 2); len(parts) == 2 {
+								currentAnswerContent = parts[0]
+								allZai.toolCallContent.WriteString(parts[1])
+							}
+						} else if strings.Contains(currentAnswerContent, endDelimiter) {
+							allZai.endToolCall = true
+							if parts := strings.SplitN(currentAnswerContent, endDelimiter, 2); len(parts) == 2 {
+								currentAnswerContent = parts[1]
+								allZai.toolCallContent.WriteString(parts[0])
+							}
+						} else if allZai.hasToolCall && !allZai.endToolCall {
+							allZai.toolCallContent.WriteString(currentAnswerContent)
+							continue
+						}
+					}
+
+					if currentAnswerContent != "" {
+						allZai.allContent.WriteString(currentAnswerContent)
+						deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, currentAnswerContent, "", false, "")
+						dataBytes, _ := json.Marshal(deltaResp)
+						dataChan <- string(dataBytes)
+					}
 				case "done":
+					if allZai.hasThinking && !allZai.endThinking {
+						allZai.endThinking = true
+						deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "</think>", "", false, "")
+						dataBytes, _ := json.Marshal(deltaResp)
+						dataChan <- string(dataBytes)
+					}
+					if allZai.hasToolCall && !allZai.endToolCall {
+						allZai.endToolCall = true
+					}
+
 					stopChan <- true
 					return
 				}
@@ -1666,10 +1745,64 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case data := <-dataChan:
+			if common.DebugEnabled {
+				common.SysLog(fmt.Sprintf("[ZaiStreamResponseHandler] %s", data))
+			}
 			c.Render(-1, common.CustomEvent{Data: "data: " + data})
 			return true
 		case <-stopChan:
+			if allZai.hasToolCall && allZai.toolCallContent.String() != "" {
+				fullToolCallJSON := allZai.toolCallContent.String()
+				var wrapper ZaiSourceToolCallWrapper
+				if err := json.Unmarshal([]byte(fullToolCallJSON), &wrapper); err != nil {
+					common.SysError(fmt.Sprintf("failed to unmarshal tool call json: %s", fullToolCallJSON))
+				} else {
+					for i, tc := range wrapper.ToolCalls {
+						currentTool := dto.ToolCallResponse{
+							Index: &i,
+							ID:    tc.ID,
+							Type:  tc.Type,
+							Function: dto.FunctionResponse{
+								Name:      tc.Function.Name,
+								Arguments: tc.Function.Arguments,
+							},
+						}
+						allZai.toolCalls = append(allZai.toolCalls, currentTool)
+					}
+					choice := dto.ChatCompletionsStreamResponseChoice{
+						Index: 0,
+						Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+							ToolCalls: allZai.toolCalls,
+						},
+					}
+					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "", "", false, "")
+					deltaResp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+					dataBytes, _ := json.Marshal(deltaResp)
+					if common.DebugEnabled {
+						common.SysLog(fmt.Sprintf("[ZaiStreamResponseHandler] %s", string(dataBytes)))
+					}
+					c.Render(-1, common.CustomEvent{Data: "data: " + string(dataBytes)})
+
+					endDeltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "", "", true, "tool_calls")
+					endDataBytes, _ := json.Marshal(endDeltaResp)
+					if common.DebugEnabled {
+						common.SysLog(fmt.Sprintf("[ZaiStreamResponseHandler] %s", string(endDataBytes)))
+					}
+					c.Render(-1, common.CustomEvent{Data: "data: " + string(endDataBytes)})
+				}
+			} else {
+				endDeltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "", "", true, "stop")
+				endDataBytes, _ := json.Marshal(endDeltaResp)
+				if common.DebugEnabled {
+					common.SysLog(fmt.Sprintf("[ZaiStreamResponseHandler] %s", string(endDataBytes)))
+				}
+				c.Render(-1, common.CustomEvent{Data: "data: " + string(endDataBytes)})
+			}
+			if common.DebugEnabled {
+				common.SysLog(fmt.Sprintf("[ZaiStreamResponseHandler] %s", "[DONE]"))
+			}
 			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+
 			return false
 		}
 	})
@@ -1694,6 +1827,9 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	scanner.Split(bufio.ScanLines)
 
 	allZai := &zaiResponseContext{}
+	startDelimiter := "▶"
+	endDelimiter := "◀"
+
 	for scanner.Scan() {
 		info.SetFirstResponseTime()
 		line := strings.TrimSpace(scanner.Text())
@@ -1724,13 +1860,45 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 					if parts := strings.SplitN(msg.Data.EditContent, separator, 2); len(parts) == 2 {
 						// The part after </details> is the first piece of the answer
 						currentAnswerContent = strings.TrimSpace(parts[1])
+					} else {
+						currentAnswerContent = msg.Data.EditContent
 					}
 				} else {
 					// This is a normal answer chunk
 					currentAnswerContent = msg.Data.DeltaContent
 				}
-				allZai.allContent.WriteString(currentAnswerContent)
+
+				if strings.Contains(currentAnswerContent, startDelimiter) || strings.Contains(currentAnswerContent, endDelimiter) || (allZai.hasToolCall && !allZai.endToolCall) {
+					if strings.Contains(currentAnswerContent, startDelimiter) {
+						allZai.hasToolCall = true
+						allZai.endToolCall = false
+						if parts := strings.SplitN(currentAnswerContent, startDelimiter, 2); len(parts) == 2 {
+							currentAnswerContent = parts[0]
+							allZai.toolCallContent.WriteString(parts[1])
+						}
+					} else if strings.Contains(currentAnswerContent, endDelimiter) {
+						allZai.endToolCall = true
+						if parts := strings.SplitN(currentAnswerContent, endDelimiter, 2); len(parts) == 2 {
+							currentAnswerContent = parts[1]
+							allZai.toolCallContent.WriteString(parts[0])
+						}
+					} else if allZai.hasToolCall && !allZai.endToolCall {
+						allZai.toolCallContent.WriteString(currentAnswerContent)
+						continue
+					}
+				}
+
+				if currentAnswerContent != "" {
+					allZai.allContent.WriteString(currentAnswerContent)
+				}
 			case "done":
+				if allZai.hasThinking && !allZai.endThinking {
+					allZai.endThinking = true
+				}
+				if allZai.hasToolCall && !allZai.endToolCall {
+					allZai.endToolCall = true
+				}
+
 				break
 			}
 		}
@@ -1764,6 +1932,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 			Content:   allZai.thinkingContent.String(),
 			Signature: fmt.Sprintf("%d", time.Now().Unix()),
 		}
+		message.ReasoningContent = allZai.thinkingContent.String()
 	}
 
 	// 添加tool_calls（如果有）
