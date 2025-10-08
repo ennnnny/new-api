@@ -61,10 +61,6 @@ type GerAuthenticateResponse struct {
 		SessionJwt   string `json:"session_jwt"`
 		SessionToken string `json:"session_token"`
 		StatusCode   int    `json:"status_code"`
-		Organization []struct {
-			OrganizationExternalId string `json:"organization_external_id"`
-			OrganizationSlug       string `json:"organization_slug"`
-		} `json:"organization"`
 	} `json:"data"`
 }
 
@@ -211,11 +207,14 @@ func GerGetSessionToken(apiKey string, memberId string, memberSessionId string) 
 	GerBaseHeader(&req.Header)
 	req.Header.Set("Authorization", "Basic "+authorization)
 
+	now := time.Now().UTC()
+	formatted := now.Format(time.RFC3339Nano)
+
 	xSdkClient := map[string]interface{}{
 		"event_id":                 "event-id-" + uuid.NewString(),
 		"app_session_id":           "app-session-id-" + uuid.NewString(),
 		"persistent_id":            "persistent-id-" + uuid.NewString(),
-		"client_sent_at":           time.Now().Format("2006-01-02T15:04:05.999Z"),
+		"client_sent_at":           formatted,
 		"timezone":                 "Asia/Hong_Kong",
 		"stytch_member_id":         memberId,
 		"stytch_member_session_id": memberSessionId,
@@ -227,21 +226,35 @@ func GerGetSessionToken(apiKey string, memberId string, memberSessionId string) 
 			"version":    "5.35.1",
 		},
 	}
+	xSdkClientJson, _ := json.Marshal(xSdkClient)
+	common.SysLog(fmt.Sprintf("xSdkClientJson: %s", xSdkClientJson))
 
-	req.Header.Set("x-sdk-client", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", xSdkClient))))
-	req.Header.Set("x-sdk-parent-host", "https://groq.com")
+	req.Header.Set("X-SDK-Client", base64.StdEncoding.EncodeToString(xSdkClientJson))
+	req.Header.Set("X-SDK-Parent-Host", "https://chat.groq.com")
+
+	//for name, values := range req.Header {
+	//	for _, value := range values {
+	//		common.SysLog(name + ": " + value)
+	//	}
+	//}
 
 	res, err := client.Do(req)
 	if err != nil {
+		common.SysLog(err.Error())
 		return GerAuthenticateResponse{}, errors.New("request failed")
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		return GerAuthenticateResponse{}, errors.New("authenticate failed")
 	}
+
+	newBodyByte, _ := io.ReadAll(res.Body)
+	common.SysLog("body:" + string(newBodyByte))
+
 	var result GerAuthenticateResponse
-	err = json.NewDecoder(res.Body).Decode(&result)
+	err = json.Unmarshal(newBodyByte, &result)
 	if err != nil {
+		common.SysLog("decoder error:" + err.Error())
 		return GerAuthenticateResponse{}, err
 	}
 	return result, nil
