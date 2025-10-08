@@ -3,6 +3,7 @@ package openai
 import (
 	"bufio"
 	"bytes"
+	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
@@ -21,6 +22,7 @@ import (
 	"one-api/service"
 	"one-api/types"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1087,9 +1089,9 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 //Zai Start
 
 const (
-	ZAI_X_FE_VERSION   = "prod-fe-1.0.94"
-	ZAI_BROWSER_UA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-	ZAI_SEC_CH_UA      = "\"Chromium\";v=\"140\", \"Not=A?Brand\";v=\"24\", \"Google Chrome\";v=\"140\""
+	ZAI_X_FE_VERSION   = "prod-fe-1.0.95"
+	ZAI_BROWSER_UA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
+	ZAI_SEC_CH_UA      = "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\""
 	ZAI_SEC_CH_UA_MOB  = "?0"
 	ZAI_SEC_CH_UA_PLAT = "\"Windows\""
 	ZAI_ORIGIN_BASE    = "https://chat.z.ai"
@@ -1178,42 +1180,109 @@ var SUPPORTED_Z_MODELS = []ModelZaiConfig{
 	},
 }
 
-// 获取匿名token（每次对话使用不同token，避免共享记忆）
-func getZaiAnonymousToken() (string, error) {
+type zaiAuthResponse struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
+func fetchZaiAuth(token string) (*zaiAuthResponse, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", ZAI_ORIGIN_BASE+"/api/v1/auths/", nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// 伪装浏览器头
 	req.Header.Set("User-Agent", ZAI_BROWSER_UA)
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	req.Header.Set("X-FE-Version", ZAI_X_FE_VERSION)
 	req.Header.Set("sec-ch-ua", ZAI_SEC_CH_UA)
 	req.Header.Set("sec-ch-ua-mobile", ZAI_SEC_CH_UA_MOB)
 	req.Header.Set("sec-ch-ua-platform", ZAI_SEC_CH_UA_PLAT)
 	req.Header.Set("Origin", ZAI_ORIGIN_BASE)
 	req.Header.Set("Referer", ZAI_ORIGIN_BASE+"/")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anon token status=%d", resp.StatusCode)
+		return nil, fmt.Errorf("zai auth status=%d", resp.StatusCode)
 	}
-	var body struct {
-		Token string `json:"token"`
-	}
+	var body zaiAuthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
+		return nil, err
 	}
 	if body.Token == "" {
-		return "", fmt.Errorf("anon token empty")
+		body.Token = token
 	}
-	return body.Token, nil
+	return &body, nil
+}
+
+func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
+	key := strings.TrimSpace(info.ApiKey)
+	var auth *zaiAuthResponse
+	var err error
+	if key == "" || key == "zai" {
+		auth, err = fetchZaiAuth("")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		auth, err = fetchZaiAuth(key)
+		if err != nil {
+			// 如果获取用户信息失败，返回原始 token，避免请求直接失败
+			common.SysError("fetchZaiAuth failed: " + err.Error())
+			return &zaiAuthResponse{ID: "", Token: key}, nil
+		}
+	}
+	if auth.Token != "" {
+		info.ApiKey = auth.Token
+	}
+	return auth, nil
+}
+
+func generateZaiSignature(params map[string]string, content string) (string, string, error) {
+	required := []string{"timestamp", "requestId", "user_id"}
+	for _, key := range required {
+		if strings.TrimSpace(params[key]) == "" {
+			return "", "", fmt.Errorf("missing param: %s", key)
+		}
+	}
+
+	signatureTime := time.Now().UnixMilli()
+	signatureExpire := signatureTime / (5 * 60 * 1000)
+	signature1Plain := fmt.Sprintf("%d", signatureExpire)
+	signature1 := hmacSHA256Hex([]byte("junjie"), signature1Plain)
+
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys)*2)
+	for _, k := range keys {
+		parts = append(parts, k)
+		parts = append(parts, params[k])
+	}
+	signatureParams := strings.Join(parts, ",")
+	signaturePlain := fmt.Sprintf("%s|%s|%d", signatureParams, content, signatureTime)
+	signature := hmacSHA256Hex([]byte(signature1), signaturePlain)
+
+	return signature, fmt.Sprintf("%d", signatureTime), nil
+}
+
+func hmacSHA256Hex(key []byte, message string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func getZaiUpstreamModel(modelID string) *ModelZaiConfig {
@@ -1263,9 +1332,13 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	chatID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
 	msgID := fmt.Sprintf("%d", time.Now().UnixNano())
 
-	if info.ApiKey == "zai" {
-		info.ApiKey, _ = getZaiAnonymousToken()
+	authInfo, err := ensureZaiAuth(info)
+	if err != nil {
+		common.SysError("ensureZaiAuth error: " + err.Error())
+		return bytes.NewReader(bodyBytes)
 	}
+
+	lastMessageContent := ""
 
 	// 决定是否启用思考功能
 	enableThinking := false
@@ -1304,6 +1377,24 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 			for _, origMsg := range messagesArray {
 				if msgMap, ok := origMsg.(map[string]interface{}); ok {
 					msg := make(map[string]interface{})
+
+					if content, exists := msgMap["content"]; exists {
+						switch typed := content.(type) {
+						case string:
+							lastMessageContent = typed
+						case []interface{}:
+							for _, part := range typed {
+								if partMap, ok := part.(map[string]interface{}); ok {
+									if partType, ok := partMap["type"].(string); ok && partType == "text" {
+										if textStr, ok := partMap["text"].(string); ok {
+											lastMessageContent = textStr
+											break
+										}
+									}
+								}
+							}
+						}
+					}
 
 					// 复制role
 					if role, exists := msgMap["role"]; exists {
@@ -1445,63 +1536,64 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		common.SysLog("GenZaiBody: " + string(reqBody))
 	}
 
-	baseURL := "https://chat.z.ai/api/chat/completions"
-	timestamp := fmt.Sprintf("%d", time.Now().UnixMilli())
-	requestID := fmt.Sprintf("%x-%x-%x-%x-%x",
-		time.Now().UnixNano(), time.Now().Unix(),
-		time.Now().Nanosecond(), time.Now().Second(), time.Now().Minute())
-	userID := fmt.Sprintf("%x-%x-%x-%x-%x",
-		time.Now().Unix(), time.Now().Nanosecond(),
-		time.Now().Second(), time.Now().Minute(), time.Now().Hour())
-	fullURL := fmt.Sprintf("%s?timestamp=%s&requestId=%s&user_id=%s&version=0.0.1&platform=web&token=%s"+
-		"&user_agent=%s&language=zh-CN&languages=zh-CN,zh&timezone=Asia/Shanghai"+
-		"&cookie_enabled=true&screen_width=1680&screen_height=1050&screen_resolution=1680x1050"+
-		"&viewport_height=812&viewport_width=1087&viewport_size=1087x812"+
-		"&color_depth=30&pixel_ratio=2"+
-		"&current_url=%s&pathname=/c/%s&search=&hash="+
-		"&host=chat.z.ai&hostname=chat.z.ai&protocol=https:&referrer="+
-		"&title=%s"+
-		"&timezone_offset=-480&local_time=%s&utc_time=%s"+
-		"&is_mobile=false&is_touch=false&max_touch_points=0"+
-		"&browser_name=Chrome&os_name=Mac+OS&signature_timestamp=%s",
-		baseURL, timestamp, requestID, userID, info.ApiKey,
-		url.QueryEscape(ZAI_BROWSER_UA),
-		url.QueryEscape(ZAI_ORIGIN_BASE+"/c/"+chatID), chatID,
-		url.QueryEscape("Z.ai Chat - Free AI powered by GLM-4.6"),
-		url.QueryEscape(time.Now().Format("2006-01-02T15:04:05.000Z")),
-		url.QueryEscape(time.Now().UTC().Format(time.RFC1123)),
-		timestamp,
-	)
+	timestamp := time.Now().UnixMilli()
+	timestampStr := fmt.Sprintf("%d", timestamp)
+	requestID := uuid.NewString()
+	params := url.Values{}
+	params.Set("timestamp", timestampStr)
+	params.Set("requestId", requestID)
+	var signature string
+	if authInfo != nil && authInfo.ID != "" {
+		params.Set("user_id", authInfo.ID)
+		sig, sigTs, sigErr := generateZaiSignature(map[string]string{
+			"requestId": requestID,
+			"timestamp": timestampStr,
+			"user_id":   authInfo.ID,
+		}, lastMessageContent)
+		if sigErr != nil {
+			common.SysError("generateZaiSignature failed: " + sigErr.Error())
+		} else {
+			signature = sig
+			params.Set("signature_timestamp", sigTs)
+		}
+	}
 
-	hash := sha256.Sum256(reqBody)
-	signature := fmt.Sprintf("%x", hash)
+	baseURL := ZAI_ORIGIN_BASE + "/api/chat/completions"
+	fullURL := baseURL
+	if query := params.Encode(); query != "" {
+		fullURL = baseURL + "?" + query
+	}
 
-	info.HeadersOverride = map[string]interface{}{
+	headerOverride := map[string]interface{}{
 		"Content-Type":       "application/json",
 		"Accept":             "*/*",
-		"Accept-Language":    "zh-CN",
+		"Accept-Language":    "zh-CN,zh;q=0.9",
+		"Cache-Control":      "no-cache",
+		"Pragma":             "no-cache",
+		"Connection":         "keep-alive",
 		"User-Agent":         ZAI_BROWSER_UA,
 		"Authorization":      "Bearer " + info.ApiKey,
 		"sec-ch-ua":          ZAI_SEC_CH_UA,
 		"sec-ch-ua-mobile":   ZAI_SEC_CH_UA_MOB,
 		"sec-ch-ua-platform": ZAI_SEC_CH_UA_PLAT,
 		"X-FE-Version":       ZAI_X_FE_VERSION,
-		"X-Signature":        signature,
 		"Origin":             ZAI_ORIGIN_BASE,
 		"Referer":            ZAI_ORIGIN_BASE + "/c/" + chatID,
-		"Connection":         "keep-alive",
 		"Sec-Fetch-Dest":     "empty",
 		"Sec-Fetch-Mode":     "cors",
 		"Sec-Fetch-Site":     "same-origin",
-		"Cookie":             fmt.Sprintf("token=%s", info.ApiKey),
 		"full_url":           fullURL,
 	}
+	if signature != "" {
+		headerOverride["X-Signature"] = signature
+	}
+	info.HeadersOverride = headerOverride
 
 	return bytes.NewReader(reqBody)
 }
 
 func GenZaiHeader(c *http.Header, info *relaycommon.RelayInfo) {
-	keepKey := []string{"Content-Type", "Accept", "Accept-Language", "User-Agent", "Authorization", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "X-FE-Version", "X-Signature", "Origin", "Referer", "Connection", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site", "Cookie"}
+	keepKey := []string{"Content-Type", "Accept", "Accept-Language", "Cache-Control", "Pragma", "User-Agent", "Authorization", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "X-FE-Version", "X-Signature", "Origin", "Referer", "Connection", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"}
 	canonical := make(map[string]struct{}, len(keepKey))
 	for _, k := range keepKey {
 		canonical[http.CanonicalHeaderKey(k)] = struct{}{}
