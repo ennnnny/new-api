@@ -1477,7 +1477,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	}
 
 	if tools != nil {
-		messages = append(messages, map[string]interface{}{
+		toolMsg := map[string]interface{}{
 			"role": "user",
 			"content": "\n\n如果需要调用工具，请仅用以下结构体回复（确保标签完整闭合）:\n" +
 				"▶{\n" +
@@ -1492,7 +1492,8 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 				"    }\n" +
 				"  ]\n" +
 				"}◀",
-		})
+		}
+		messages = append([]map[string]interface{}{toolMsg}, messages...)
 	}
 
 	// 构造上游请求
