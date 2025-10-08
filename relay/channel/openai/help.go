@@ -32,6 +32,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// groq start
+
 type GerProfile struct {
 	User struct {
 		Orgs struct {
@@ -59,6 +61,10 @@ type GerAuthenticateResponse struct {
 		SessionJwt   string `json:"session_jwt"`
 		SessionToken string `json:"session_token"`
 		StatusCode   int    `json:"status_code"`
+		Organization []struct {
+			OrganizationExternalId string `json:"organization_external_id"`
+			OrganizationSlug       string `json:"organization_slug"`
+		} `json:"organization"`
 	} `json:"data"`
 }
 
@@ -72,13 +78,15 @@ func getMd5String(str string) string {
 }
 
 func initGerAccount(key string) map[string]string {
-	var organization, token string
+	var organization, token, memberId, memberSessionId string
 
 	if strings.Contains(key, "#") {
 		splitStr := strings.Split(key, "#")
-		if len(splitStr) == 2 {
+		if len(splitStr) == 4 {
 			organization = splitStr[0]
 			key = splitStr[1]
+			memberId = splitStr[2]
+			memberSessionId = splitStr[3]
 		}
 	}
 	keyMd5 := getMd5String(key)
@@ -103,7 +111,7 @@ func initGerAccount(key string) map[string]string {
 			token = key
 		}
 		if len(key) == 44 {
-			tokenTemp, err := GerGetSessionToken(key)
+			tokenTemp, err := GerGetSessionToken(key, memberId, memberSessionId)
 			if err == nil {
 				token = tokenTemp.Data.SessionJwt
 				if organization == "" {
@@ -137,17 +145,17 @@ func initGerAccount(key string) map[string]string {
 
 func GerBaseHeader(c *http.Header) {
 	c.Set("accept", "*/*")
-	c.Set("accept-language", "zh-CN,zh;q=0.9")
+	c.Set("accept-language", "zh-CN,zh;q=0.8")
 	c.Set("content-type", "application/json")
-	c.Set("origin", "https://groq.com")
-	c.Set("referer", "https://groq.com/")
-	c.Set("sec-ch-ua", `"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"`)
+	c.Set("origin", "https://chat.groq.com")
+	c.Set("referer", "https://chat.groq.com/")
+	c.Set("sec-ch-ua", `"Brave";v="141", "Not?A_Brand";v="8", "Chromium";v="141"`)
 	c.Set("sec-ch-ua-mobile", "?0")
-	c.Set("sec-ch-ua-platform", `"Windows"`)
+	c.Set("sec-ch-ua-platform", `"macOS"`)
 	c.Set("sec-fetch-dest", "empty")
 	c.Set("sec-fetch-mode", "cors")
 	c.Set("sec-fetch-site", "cross-site")
-	c.Set("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+	c.Set("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 }
 
 func GerOrganizationId(apiKey string) string {
@@ -189,20 +197,38 @@ func GerOrganizationId(apiKey string) string {
 	return result.User.Orgs.Data[0].Id
 }
 
-func GerGetSessionToken(apiKey string) (GerAuthenticateResponse, error) {
+func GerGetSessionToken(apiKey string, memberId string, memberSessionId string) (GerAuthenticateResponse, error) {
 	if apiKey == "" {
 		return GerAuthenticateResponse{}, errors.New("session token is empty")
 	}
 	authorization := GerGenerateRefreshToken(apiKey)
 
 	client := http.Client{}
-	req, err := http.NewRequest("POST", "https://web.stytch.com/sdk/v1/sessions/authenticate", strings.NewReader(`{}`))
+	req, err := http.NewRequest("POST", "https://api.stytchb2b.groq.com/sdk/v1/b2b/sessions/authenticate", strings.NewReader(`{}`))
 	if err != nil {
 		return GerAuthenticateResponse{}, errors.New("create request failed")
 	}
 	GerBaseHeader(&req.Header)
 	req.Header.Set("Authorization", "Basic "+authorization)
-	req.Header.Set("x-sdk-client", "eyJldmVudF9pZCI6ImV2ZW50LWlkLWQ4M2IwNTI4LTllNjMtNDkxYi05OGM5LWUyZmJmODY4MWRlZiIsImFwcF9zZXNzaW9uX2lkIjoiYXBwLXNlc3Npb24taWQtNjRlNGI4ZTItOWM2NS00MDFlLWIyMjUtYjk4MWYxNGRjMTRjIiwicGVyc2lzdGVudF9pZCI6InBlcnNpc3RlbnQtaWQtOTNlZWYwNWUtYWE0OS00OWJhLThhNjktYWVjZTA3ZTZiM2NmIiwiY2xpZW50X3NlbnRfYXQiOiIyMDI0LTA0LTI2VDExOjM4OjU1Ljk0NVoiLCJ0aW1lem9uZSI6IkFzaWEvU2hhbmdoYWkiLCJzdHl0Y2hfdXNlcl9pZCI6InVzZXItbGl2ZS1kZDM4ODRiYS01M2YyLTRjNjEtYTI5Yi02NzEwNmExMDMxNTciLCJzdHl0Y2hfc2Vzc2lvbl9pZCI6InNlc3Npb24tbGl2ZS01ZjQ5NDViZS1kNTIyLTQyZWEtYTEzNC01MWE4YzM2OTBkN2UiLCJhcHAiOnsiaWRlbnRpZmllciI6ImNvbnNvbGUuZ3JvcS5jb20ifSwic2RrIjp7ImlkZW50aWZpZXIiOiJTdHl0Y2guanMgSmF2YXNjcmlwdCBTREsiLCJ2ZXJzaW9uIjoiNC42LjAifX0=")
+
+	xSdkClient := map[string]interface{}{
+		"event_id":                 "event-id-" + uuid.NewString(),
+		"app_session_id":           "app-session-id-" + uuid.NewString(),
+		"persistent_id":            "persistent-id-" + uuid.NewString(),
+		"client_sent_at":           time.Now().Format("2006-01-02T15:04:05.999Z"),
+		"timezone":                 "Asia/Hong_Kong",
+		"stytch_member_id":         memberId,
+		"stytch_member_session_id": memberSessionId,
+		"app": map[string]string{
+			"identifier": "chat.groq.com",
+		},
+		"sdk": map[string]string{
+			"identifier": "Stytch.js Javascript SDK",
+			"version":    "5.35.1",
+		},
+	}
+
+	req.Header.Set("x-sdk-client", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", xSdkClient))))
 	req.Header.Set("x-sdk-parent-host", "https://groq.com")
 
 	res, err := client.Do(req)
@@ -222,9 +248,11 @@ func GerGetSessionToken(apiKey string) (GerAuthenticateResponse, error) {
 }
 
 func GerGenerateRefreshToken(apiKey string) string {
-	prefix := "public-token-live-26a89f59-09f8-48be-91ff-ce70e6000cb5:" + apiKey
+	prefix := "public-token-live-58df57a9-a1f5-4066-bc0c-2ff942db684f:" + apiKey
 	return base64.StdEncoding.EncodeToString([]byte(prefix))
 }
+
+// groq end
 
 type Cache struct {
 	mu    sync.RWMutex
