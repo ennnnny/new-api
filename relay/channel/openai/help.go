@@ -1534,6 +1534,76 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 				"  ]\n" +
 				"}◀",
 		}
+		if toolsArray, ok := tools.([]interface{}); ok {
+			lines := make([]string, 0, len(toolsArray))
+			for _, tool := range toolsArray {
+				toolMap, ok := tool.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if toolType, ok := toolMap["type"].(string); !ok || toolType != "function" {
+					continue
+				}
+				functionDef, _ := toolMap["function"].(map[string]interface{})
+				name, _ := functionDef["name"].(string)
+				if name == "" {
+					name = "unknown"
+				}
+				desc, _ := functionDef["description"].(string)
+				params, _ := functionDef["parameters"].(map[string]interface{})
+
+				toolDesc := []string{fmt.Sprintf("- %s: %s", name, desc)}
+
+				requiredSet := map[string]struct{}{}
+				if params != nil {
+					if reqList, exists := params["required"]; exists {
+						switch reqVal := reqList.(type) {
+						case []interface{}:
+							for _, item := range reqVal {
+								if str, ok := item.(string); ok {
+									requiredSet[str] = struct{}{}
+								}
+							}
+						case []string:
+							for _, str := range reqVal {
+								requiredSet[str] = struct{}{}
+							}
+						}
+					}
+				}
+
+				var properties map[string]interface{}
+				if params != nil {
+					if props, ok := params["properties"].(map[string]interface{}); ok {
+						properties = props
+					}
+				}
+
+				for pname, pinfo := range properties {
+					infoMap, _ := pinfo.(map[string]interface{})
+					pType := "any"
+					if t, ok := infoMap["type"].(string); ok && t != "" {
+						pType = t
+					}
+					pDesc := ""
+					if d, ok := infoMap["description"].(string); ok {
+						pDesc = d
+					}
+					reqText := " (optional)"
+					if _, ok := requiredSet[pname]; ok {
+						reqText = " (required)"
+					}
+					toolDesc = append(toolDesc, fmt.Sprintf("  - %s (%s)%s: %s", pname, pType, reqText, pDesc))
+				}
+				lines = append(lines, strings.Join(toolDesc, "\n"))
+			}
+
+			if len(lines) > 0 {
+				if content, ok := toolMsg["content"].(string); ok {
+					toolMsg["content"] = "\n\n可用的工具函数:\n\n" + strings.Join(lines, "\n") + content
+				}
+			}
+		}
 		messages = append([]map[string]interface{}{toolMsg}, messages...)
 	}
 
@@ -1566,9 +1636,9 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		},
 	}
 
-	if tools != nil {
-		upstreamReq.Tool = tools
-	}
+	//if tools != nil {
+	//	upstreamReq.Tool = tools
+	//}
 
 	reqBody, err := json.Marshal(upstreamReq)
 	if err != nil {
