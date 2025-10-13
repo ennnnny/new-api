@@ -23,6 +23,7 @@ import (
 	"one-api/types"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1130,7 +1131,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 //Zai Start
 
 const (
-	ZAI_X_FE_VERSION   = "prod-fe-1.0.95"
+	ZAI_X_FE_VERSION   = "prod-fe-1.0.98"
 	ZAI_BROWSER_UA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
 	ZAI_SEC_CH_UA      = "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\""
 	ZAI_SEC_CH_UA_MOB  = "?0"
@@ -1185,9 +1186,7 @@ var SUPPORTED_Z_MODELS = []ModelZaiConfig{
 			Thinking: true,
 		},
 		DefaultParams: map[string]interface{}{
-			"top_p":       0.95,
-			"temperature": 0.6,
-			"max_tokens":  200000,
+			"max_tokens": 195000,
 		},
 	},
 	{
@@ -1200,9 +1199,7 @@ var SUPPORTED_Z_MODELS = []ModelZaiConfig{
 			Thinking: true,
 		},
 		DefaultParams: map[string]interface{}{
-			"top_p":       0.95,
-			"temperature": 0.6,
-			"max_tokens":  128000,
+			"max_tokens": 128000,
 		},
 	},
 	{
@@ -1288,6 +1285,54 @@ func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
 		info.ApiKey = auth.Token
 	}
 	return auth, nil
+}
+
+func zs(e, t, s string) (string, string, error) {
+	// 1. const r = Number(s)
+	r, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse timestamp s: %w", err)
+	}
+
+	// 2. const i = s
+	i := s
+
+	// 3. const a = n.encode(t) -> const w = btoa(String.fromCharCode(...a))
+	// Go 中可以直接对 t 的字节切片进行 Base64 编码
+	a := []byte(t)
+	w := base64.StdEncoding.EncodeToString(a)
+
+	// 4. const c = `${e}|${w}|${i}`
+	c := fmt.Sprintf("%s|%s|%s", e, w, i)
+
+	// 5. const E = Math.floor(r / (5 * 60 * 1e3))
+	E := r / (5 * 60 * 1000)
+
+	// 6. const A = Te.sha256.hmac("junjie", `${E}`)
+	// 第一次 HMAC-SHA256
+	key1 := []byte("junjie")
+	message1 := []byte(strconv.FormatInt(E, 10))
+
+	h1 := hmac.New(sha256.New, key1)
+	h1.Write(message1)
+	A := h1.Sum(nil) // A 是一个字节切片 ([]byte)
+
+	// 7. const k = Te.sha256.hmac(A, c).toString();
+	// 第二次 HMAC-SHA256
+	// 【关键修复点】: JS 的 Te 库可能将密钥 A 转换为十六进制字符串后再使用
+	// 因此，我们在这里模拟这个行为
+	key2 := []byte(hex.EncodeToString(A)) // 将 A 转换为十六进制字符串，再作为密钥
+	message2 := []byte(c)
+
+	h2 := hmac.New(sha256.New, key2)
+	h2.Write(message2)
+	hashBytes := h2.Sum(nil)
+
+	// 将哈希结果转换为十六进制字符串
+	k := hex.EncodeToString(hashBytes)
+
+	// 8. 返回结果
+	return k, i, nil
 }
 
 func generateZaiSignature(params map[string]string, content string) (string, string, error) {
@@ -1657,13 +1702,20 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	var signature string
 	if authInfo != nil && authInfo.ID != "" {
 		params.Set("user_id", authInfo.ID)
-		sig, sigTs, sigErr := generateZaiSignature(map[string]string{
-			"requestId": requestID,
-			"timestamp": timestampStr,
-			"user_id":   authInfo.ID,
-		}, lastMessageContent)
+		sig, sigTs, sigErr := zs(fmt.Sprintf("requestId,%s,timestamp,%s,user_id,%s", requestID, timestampStr, authInfo.ID), lastMessageContent, timestampStr)
+		//sig, sigTs, sigErr := generateZaiSignature(map[string]string{
+		//	"requestId": requestID,
+		//	"timestamp": timestampStr,
+		//	"user_id":   authInfo.ID,
+		//}, lastMessageContent)
+		//if sigErr != nil {
+		//	common.SysError("generateZaiSignature failed: " + sigErr.Error())
+		//} else {
+		//	signature = sig
+		//	params.Set("signature_timestamp", sigTs)
+		//}
 		if sigErr != nil {
-			common.SysError("generateZaiSignature failed: " + sigErr.Error())
+			common.SysError("zs failed: " + sigErr.Error())
 		} else {
 			signature = sig
 			params.Set("signature_timestamp", sigTs)
