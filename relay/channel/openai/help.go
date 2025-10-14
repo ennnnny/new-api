@@ -1138,6 +1138,7 @@ const (
 	ZAI_SEC_CH_UA_MOB  = "?0"
 	ZAI_SEC_CH_UA_PLAT = "\"Windows\""
 	ZAI_ORIGIN_BASE    = "https://chat.z.ai"
+	ZAI_REQUEST_URL    = "https://chat.z.ai"
 )
 
 type ZaiUpstreamRequest struct {
@@ -1226,9 +1227,15 @@ type zaiAuthResponse struct {
 	Token string `json:"token"`
 }
 
-func fetchZaiAuth(token string) (*zaiAuthResponse, error) {
+func fetchZaiAuth(token string, channelBaseUrl string) (*zaiAuthResponse, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", ZAI_ORIGIN_BASE+"/api/v1/auths/", nil)
+	var currentUrl string
+	if channelBaseUrl != "" {
+		currentUrl = channelBaseUrl
+	} else {
+		currentUrl = ZAI_REQUEST_URL
+	}
+	req, err := http.NewRequest("GET", currentUrl+"/api/v1/auths/", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1270,23 +1277,24 @@ func fetchZaiAuth(token string) (*zaiAuthResponse, error) {
 }
 
 func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
-	authData, found := helpCache.HelpCacheGet(fmt.Sprintf("zaiAuth:%v", info.ChannelId))
-	var key string
-	if found {
-		key = authData.(*zaiAuthResponse).Token
-	} else {
-		key = strings.TrimSpace(info.ApiKey)
-	}
+	//authData, found := helpCache.HelpCacheGet(fmt.Sprintf("zaiAuth:%v", info.ChannelId))
+	//var key string
+	//if found {
+	//	key = authData.(*zaiAuthResponse).Token
+	//} else {
+	//	key = strings.TrimSpace(info.ApiKey)
+	//}
+	key := strings.TrimSpace(info.ApiKey)
 
 	var auth *zaiAuthResponse
 	var err error
 	if key == "" || key == "zai" {
-		auth, err = fetchZaiAuth("")
+		auth, err = fetchZaiAuth("", info.ChannelBaseUrl)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		auth, err = fetchZaiAuth(key)
+		auth, err = fetchZaiAuth(key, info.ChannelBaseUrl)
 		if err != nil {
 			// 如果获取用户信息失败，返回原始 token，避免请求直接失败
 			common.SysError("fetchZaiAuth failed: " + err.Error())
@@ -1296,7 +1304,7 @@ func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
 	if auth.Token != "" {
 		info.ApiKey = auth.Token
 		//缓存3分钟
-		helpCache.HelpCacheSet(fmt.Sprintf("zaiAuth:%v", info.ChannelId), auth, 3*60*60)
+		//helpCache.HelpCacheSet(fmt.Sprintf("zaiAuth:%v", info.ChannelId), auth, 3*60*60)
 	}
 	return auth, nil
 }
@@ -1433,7 +1441,6 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	msgID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	authInfo, err := ensureZaiAuth(info)
-	common.SysLog(authInfo.Token)
 	if err != nil {
 		common.SysError("ensureZaiAuth error: " + err.Error())
 		return bytes.NewReader(bodyBytes)
@@ -1738,7 +1745,13 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		}
 	}
 
-	baseURL := ZAI_ORIGIN_BASE + "/api/chat/completions"
+	var currentUrl string
+	if info.ChannelBaseUrl != "" {
+		currentUrl = info.ChannelBaseUrl
+	} else {
+		currentUrl = ZAI_REQUEST_URL
+	}
+	baseURL := currentUrl + "/api/chat/completions"
 	fullURL := baseURL
 	if query := params.Encode(); query != "" {
 		fullURL = baseURL + "?" + query
