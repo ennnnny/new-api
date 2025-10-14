@@ -1155,9 +1155,10 @@ type ZaiUpstreamRequest struct {
 		Name    string `json:"name"`
 		OwnedBy string `json:"owned_by"`
 	} `json:"model_item,omitempty"`
-	ToolServers []string          `json:"tool_servers,omitempty"`
-	Variables   map[string]string `json:"variables,omitempty"`
-	Tool        interface{}       `json:"tool,omitempty"`
+	ToolServers     []string          `json:"tool_servers,omitempty"`
+	Variables       map[string]string `json:"variables,omitempty"`
+	Tool            interface{}       `json:"tool,omitempty"`
+	SignaturePrompt string            `json:"signature_prompt,omitempty"`
 }
 
 // ModelZaiConfig 模型配置结构
@@ -1231,6 +1232,9 @@ func fetchZaiAuth(token string) (*zaiAuthResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	if common.DebugEnabled {
+		common.SysLog("fetchZaiAuth: " + token)
+	}
 	// 伪装浏览器头
 	req.Header.Set("User-Agent", ZAI_BROWSER_UA)
 	req.Header.Set("Accept", "*/*")
@@ -1266,7 +1270,14 @@ func fetchZaiAuth(token string) (*zaiAuthResponse, error) {
 }
 
 func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
-	key := strings.TrimSpace(info.ApiKey)
+	authData, found := helpCache.HelpCacheGet(fmt.Sprintf("zaiAuth:%v", info.ChannelId))
+	var key string
+	if found {
+		key = authData.(*zaiAuthResponse).Token
+	} else {
+		key = strings.TrimSpace(info.ApiKey)
+	}
+
 	var auth *zaiAuthResponse
 	var err error
 	if key == "" || key == "zai" {
@@ -1284,6 +1295,8 @@ func ensureZaiAuth(info *relaycommon.RelayInfo) (*zaiAuthResponse, error) {
 	}
 	if auth.Token != "" {
 		info.ApiKey = auth.Token
+		//缓存3分钟
+		helpCache.HelpCacheSet(fmt.Sprintf("zaiAuth:%v", info.ChannelId), auth, 3*60*60)
 	}
 	return auth, nil
 }
@@ -1420,6 +1433,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	msgID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	authInfo, err := ensureZaiAuth(info)
+	common.SysLog(authInfo.Token)
 	if err != nil {
 		common.SysError("ensureZaiAuth error: " + err.Error())
 		return bytes.NewReader(bodyBytes)
@@ -1680,6 +1694,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 			"{{USER_LOCATION}}":    "Unknown",
 			"{{CURRENT_DATETIME}}": time.Now().Format("2006-01-02 15:04:05"),
 		},
+		SignaturePrompt: lastMessageContent,
 	}
 
 	//if tools != nil {
