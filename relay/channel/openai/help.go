@@ -1132,7 +1132,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 //Zai Start
 
 const (
-	ZAI_X_FE_VERSION   = "prod-fe-1.0.98"
+	ZAI_X_FE_VERSION   = "prod-fe-1.0.103"
 	ZAI_BROWSER_UA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
 	ZAI_SEC_CH_UA      = "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\""
 	ZAI_SEC_CH_UA_MOB  = "?0"
