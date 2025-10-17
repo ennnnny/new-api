@@ -1332,7 +1332,7 @@ func zs(e, t, s string) (string, string, error) {
 
 	// 6. const A = Te.sha256.hmac("junjie", `${E}`)
 	// 第一次 HMAC-SHA256
-	key1 := []byte("junjie")
+	key1 := []byte("key-@@@@)))()((9))-xxxx&&&%%%%%")
 	message1 := []byte(strconv.FormatInt(E, 10))
 
 	h1 := hmac.New(sha256.New, key1)
