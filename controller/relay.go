@@ -229,7 +229,7 @@ func getChannel(c *gin.Context, group, originalModel string, retryCount int) (*m
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, originalModel, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（数据库一致性已被破坏，retry）", selectGroup, originalModel), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, originalModel), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, originalModel)
 	if newAPIError != nil {
@@ -299,6 +299,9 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		userGroup := c.GetString("group")
 		channelId := c.GetInt("channel_id")
 		other := make(map[string]interface{})
+		if c.Request != nil && c.Request.URL != nil {
+			other["request_path"] = c.Request.URL.Path
+		}
 		other["error_type"] = err.GetErrorType()
 		other["error_code"] = err.GetErrorCode()
 		other["status_code"] = err.StatusCode

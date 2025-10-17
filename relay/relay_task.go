@@ -72,10 +72,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	} else {
 		ratio = modelPrice * groupRatio
 	}
-	if len(info.PriceData.OtherRatios) > 0 {
-		for _, ra := range info.PriceData.OtherRatios {
-			if 1.0 != ra {
-				ratio *= ra
+	// FIXME: 临时修补，支持任务仅按次计费
+	if !common.StringsContains(constant.TaskPricePatches, modelName) {
+		if len(info.PriceData.OtherRatios) > 0 {
+			for _, ra := range info.PriceData.OtherRatios {
+				if 1.0 != ra {
+					ratio *= ra
+				}
 			}
 		}
 	}
@@ -153,18 +156,26 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 				//	gRatio = userGroupRatio
 				//}
 				logContent := fmt.Sprintf("操作 %s", info.Action)
-				if len(info.PriceData.OtherRatios) > 0 {
-					var contents []string
-					for key, ra := range info.PriceData.OtherRatios {
-						if 1.0 != ra {
-							contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
+				// FIXME: 临时修补，支持任务仅按次计费
+				if common.StringsContains(constant.TaskPricePatches, modelName) {
+					logContent = fmt.Sprintf("%s，按次计费", logContent)
+				} else {
+					if len(info.PriceData.OtherRatios) > 0 {
+						var contents []string
+						for key, ra := range info.PriceData.OtherRatios {
+							if 1.0 != ra {
+								contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
+							}
 						}
-					}
-					if len(contents) > 0 {
-						logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+						if len(contents) > 0 {
+							logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+						}
 					}
 				}
 				other := make(map[string]interface{})
+				if c != nil && c.Request != nil && c.Request.URL != nil {
+					other["request_path"] = c.Request.URL.Path
+				}
 				other["model_price"] = modelPrice
 				other["group_ratio"] = groupRatio
 				if hasUserGroupRatio {
@@ -394,12 +405,12 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			return
 		}
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
-			openAIVideo, err := converter.ConvertToOpenAIVideo(originTask)
+			openAIVideoData, err := converter.ConvertToOpenAIVideo(originTask)
 			if err != nil {
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody, _ = json.Marshal(openAIVideo)
+			respBody = openAIVideoData
 			return
 		}
 		taskResp = service.TaskErrorWrapperLocal(errors.New(fmt.Sprintf("not_implemented:%s", originTask.Platform)), "not_implemented", http.StatusNotImplemented)
