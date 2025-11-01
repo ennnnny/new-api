@@ -1971,11 +1971,12 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					// 创建流式响应，content 包含 <think> 标签（兼容现有程序）
 					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, contentWithTag, "", false, "")
 
-					// 同时添加 reasoning_content 字段（符合 OpenAI 标准）
-					// 手动设置 reasoning_content 为纯净内容
-					if len(deltaResp.Choices) > 0 {
-						deltaResp.Choices[0].Delta.ReasoningContent = &cleaned
-					}
+					// 注释掉 reasoning_content 字段，避免客户端报错 "reasoning part reasoning-0 not found"
+					// 某些客户端要求 reasoning_content 必须配套 reasoning_parts 结构
+					// 当前通过 <think> 标签的方式已经能满足大多数客户端的需求
+					//if len(deltaResp.Choices) > 0 {
+					//	deltaResp.Choices[0].Delta.ReasoningContent = &cleaned
+					//}
 
 					dataBytes, _ := json.Marshal(deltaResp)
 					dataChan <- string(dataBytes)
