@@ -1470,6 +1470,12 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 			enableThinking = true
 		}
 	}
+	// 如果请求带有 reasoning_effort 参数且有值，也启用思考
+	if reasoningEffortVal, ok := requestMap["reasoning_effort"]; ok {
+		if effortStr, ok := reasoningEffortVal.(string); ok && effortStr != "" {
+			enableThinking = true
+		}
+	}
 
 	modelConfig := &SUPPORTED_Z_MODELS[0]
 	if modelVal, ok := requestMap["model"]; ok {
@@ -1953,12 +1959,24 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 					// 将所有 thinking 内容写入缓冲区，暂时不发送
 					cleaned := transformZaiThinkingContent(msg.Data.DeltaContent)
 					allZai.thinkingContent.WriteString(cleaned)
+
+					// 为兼容性保留 <think> 标签包裹的内容
+					contentWithTag := cleaned
 					if !allZai.hasThinking {
-						cleaned = "<think>" + cleaned
+						contentWithTag = "<think>" + cleaned
 						allZai.endThinking = false
 					}
 					allZai.hasThinking = true
-					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, cleaned, "", false, "")
+
+					// 创建流式响应，content 包含 <think> 标签（兼容现有程序）
+					deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, contentWithTag, "", false, "")
+
+					// 同时添加 reasoning_content 字段（符合 OpenAI 标准）
+					// 手动设置 reasoning_content 为纯净内容
+					if len(deltaResp.Choices) > 0 {
+						deltaResp.Choices[0].Delta.ReasoningContent = &cleaned
+					}
+
 					dataBytes, _ := json.Marshal(deltaResp)
 					dataChan <- string(dataBytes)
 				case "answer":
