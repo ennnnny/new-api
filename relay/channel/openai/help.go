@@ -1132,13 +1132,13 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 //Zai Start
 
 const (
-	ZAI_X_FE_VERSION   = "prod-fe-1.0.103"
-	ZAI_BROWSER_UA     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
-	ZAI_SEC_CH_UA      = "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\""
-	ZAI_SEC_CH_UA_MOB  = "?0"
-	ZAI_SEC_CH_UA_PLAT = "\"Windows\""
-	ZAI_ORIGIN_BASE    = "https://chat.z.ai"
-	ZAI_REQUEST_URL    = "https://chat.z.ai"
+	ZAI_X_FE_VERSION_DEFAULT = "prod-fe-1.0.125"
+	ZAI_BROWSER_UA           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0"
+	ZAI_SEC_CH_UA            = "\"Microsoft Edge\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\""
+	ZAI_SEC_CH_UA_MOB        = "?0"
+	ZAI_SEC_CH_UA_PLAT       = "\"Windows\""
+	ZAI_ORIGIN_BASE          = "https://chat.z.ai"
+	ZAI_REQUEST_URL          = "https://chat.z.ai"
 )
 
 type ZaiUpstreamRequest struct {
@@ -1227,6 +1227,50 @@ type zaiAuthResponse struct {
 	Token string `json:"token"`
 }
 
+func getZaiFeVersion() string {
+	cacheKey := "zaiFeVersion"
+	if common.RedisEnabled {
+		if cached, err := common.RedisGet(cacheKey); err == nil && cached != "" {
+			return cached
+		}
+	} else {
+		if cached, found := helpCache.HelpCacheGet(cacheKey); found {
+			return cached.(string)
+		}
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", ZAI_REQUEST_URL, nil)
+	if err != nil {
+		return ZAI_X_FE_VERSION_DEFAULT
+	}
+	req.Header.Set("User-Agent", ZAI_BROWSER_UA)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ZAI_X_FE_VERSION_DEFAULT
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ZAI_X_FE_VERSION_DEFAULT
+	}
+
+	re := regexp.MustCompile(`prod-fe-[\d.]+`)
+	if match := re.Find(body); match != nil {
+		version := string(match)
+		if common.RedisEnabled {
+			_ = common.RedisSet(cacheKey, version, 24*time.Hour)
+		} else {
+			helpCache.HelpCacheSet(cacheKey, version, 24*60*60)
+		}
+		return version
+	}
+
+	return ZAI_X_FE_VERSION_DEFAULT
+}
+
 func fetchZaiAuth(token string, channelBaseUrl string) (*zaiAuthResponse, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	var currentUrl string
@@ -1248,7 +1292,7 @@ func fetchZaiAuth(token string, channelBaseUrl string) (*zaiAuthResponse, error)
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("X-FE-Version", ZAI_X_FE_VERSION)
+	req.Header.Set("X-FE-Version", getZaiFeVersion())
 	req.Header.Set("sec-ch-ua", ZAI_SEC_CH_UA)
 	req.Header.Set("sec-ch-ua-mobile", ZAI_SEC_CH_UA_MOB)
 	req.Header.Set("sec-ch-ua-platform", ZAI_SEC_CH_UA_PLAT)
@@ -1476,6 +1520,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 			enableThinking = true
 		}
 	}
+	common.SysLog(fmt.Sprintf("enableThinking: %v", enableThinking))
 
 	modelConfig := &SUPPORTED_Z_MODELS[0]
 	if modelVal, ok := requestMap["model"]; ok {
@@ -1757,7 +1802,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 	} else {
 		currentUrl = ZAI_REQUEST_URL
 	}
-	baseURL := currentUrl + "/api/chat/completions"
+	baseURL := currentUrl + "/api/v2/chat/completions"
 	fullURL := baseURL
 	if query := params.Encode(); query != "" {
 		fullURL = baseURL + "?" + query
@@ -1775,7 +1820,7 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 		"sec-ch-ua":          ZAI_SEC_CH_UA,
 		"sec-ch-ua-mobile":   ZAI_SEC_CH_UA_MOB,
 		"sec-ch-ua-platform": ZAI_SEC_CH_UA_PLAT,
-		"X-FE-Version":       ZAI_X_FE_VERSION,
+		"X-FE-Version":       getZaiFeVersion(),
 		"Origin":             ZAI_ORIGIN_BASE,
 		"Referer":            ZAI_ORIGIN_BASE + "/c/" + chatID,
 		"Sec-Fetch-Dest":     "empty",
