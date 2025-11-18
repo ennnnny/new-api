@@ -1555,11 +1555,6 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 						}
 					}
 
-					// 复制role
-					if role, exists := msgMap["role"]; exists {
-						msg["role"] = role
-					}
-
 					// 处理content，支持数组和字符串格式
 					if content, exists := msgMap["content"]; exists {
 						if contentArray, ok := content.([]interface{}); ok {
@@ -1619,6 +1614,21 @@ func GenZaiBody(requestBody io.Reader, info *relaycommon.RelayInfo) io.Reader {
 								msg["content"] = contentStr
 							}
 						}
+					}
+
+					// 复制role
+					if role, exists := msgMap["role"]; exists {
+						if roleStr, ok := role.(string); ok {
+							if roleStr == "tool" {
+								msg["role"] = "user"
+							}
+							if roleStr == "developer" {
+								msg["role"] = "system"
+							}
+						} else {
+							msg["role"] = role
+						}
+						msg["role"] = role
 					}
 
 					messages = append(messages, msg)
