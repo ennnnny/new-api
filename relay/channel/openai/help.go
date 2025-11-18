@@ -2025,7 +2025,7 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 
 					dataBytes, _ := json.Marshal(deltaResp)
 					dataChan <- string(dataBytes)
-				case "answer":
+				case "answer", "other":
 					if allZai.hasThinking && !allZai.endThinking {
 						allZai.endThinking = true
 						deltaResp := createStreamResponse(responseId, createdTime, info.UpstreamModelName, "</think>", "", false, "")
@@ -2202,7 +2202,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 				cleaned := transformZaiThinkingContent(msg.Data.DeltaContent)
 				allZai.thinkingContent.WriteString(cleaned)
 				allZai.hasThinking = true
-			case "answer":
+			case "answer", "other":
 				var currentAnswerContent string
 				if msg.Data.EditContent != "" {
 					separator := "</details>"
