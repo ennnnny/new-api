@@ -2258,6 +2258,27 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 		return createCloseBodyError()
 	}
 
+	if allZai.hasToolCall && allZai.toolCallContent.String() != "" {
+		fullToolCallJSON := allZai.toolCallContent.String()
+		var wrapper ZaiSourceToolCallWrapper
+		if err := json.Unmarshal([]byte(fullToolCallJSON), &wrapper); err != nil {
+			common.SysError(fmt.Sprintf("failed to unmarshal tool call json: %s", fullToolCallJSON))
+		} else {
+			for i, tc := range wrapper.ToolCalls {
+				currentTool := dto.ToolCallResponse{
+					Index: &i,
+					ID:    tc.ID,
+					Type:  tc.Type,
+					Function: dto.FunctionResponse{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				}
+				allZai.toolCalls = append(allZai.toolCalls, currentTool)
+			}
+		}
+	}
+
 	if allZai.allContent.Len() == 0 && len(allZai.toolCalls) == 0 {
 		return types.WithOpenAIError(types.OpenAIError{
 			Message: "empty_response_content",
