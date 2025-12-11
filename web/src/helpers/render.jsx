@@ -1086,9 +1086,12 @@ function renderPriceSimpleCore({
   );
   const finalGroupRatio = effectiveGroupRatio;
 
+  const { symbol, rate } = getCurrencyConfig();
   if (modelPrice !== -1) {
-    return i18next.t('价格：${{price}} * {{ratioType}}：{{ratio}}', {
-      price: modelPrice,
+    const displayPrice = (modelPrice * rate).toFixed(6);
+    return i18next.t('价格：{{symbol}}{{price}} * {{ratioType}}：{{ratio}}', {
+      symbol: symbol,
+      price: displayPrice,
       ratioType: ratioLabel,
       ratio: finalGroupRatio,
     });
@@ -1795,10 +1798,13 @@ export function renderClaudeModelPrice(
 
     // Calculate effective input tokens (non-cached + cached with ratio applied + cache creation with ratio applied)
     const nonCachedTokens = inputTokens;
+    const legacyCacheCreationTokens = hasSplitCacheCreation
+      ? 0
+      : cacheCreationTokens;
     const effectiveInputTokens =
       nonCachedTokens +
       cacheTokens * cacheRatio +
-      cacheCreationTokens * cacheCreationRatio +
+      legacyCacheCreationTokens * cacheCreationRatio +
       cacheCreationTokens5m * cacheCreationRatio5m +
       cacheCreationTokens1h * cacheCreationRatio1h;
 
