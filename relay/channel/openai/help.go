@@ -604,9 +604,9 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	createdTime := common.GetTimestamp()
 	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	content, _ := json.Marshal(strings.Join(respArr, ""))
@@ -770,9 +770,9 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 	}
 	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	return nil, &usage
@@ -1043,9 +1043,9 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 	}
 	completionTokens := service.CountTextToken(allContent, info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	return nil, &usage
@@ -1089,9 +1089,9 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	createdTime := common.GetTimestamp()
 	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	content, _ := json.Marshal(strings.Join(respArr, ""))
@@ -2173,9 +2173,9 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 
 	completionTokens := service.CountTextToken(allZai.allContent.String(), info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	return nil, &usage
@@ -2334,9 +2334,9 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 
 	completionTokens := service.CountTextToken(allZai.allContent.String(), info.UpstreamModelName)
 	usage := dto.Usage{
-		PromptTokens:     info.PromptTokens,
+		PromptTokens:     info.GetEstimatePromptTokens(),
 		CompletionTokens: completionTokens,
-		TotalTokens:      info.PromptTokens + completionTokens,
+		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
 	}
 
 	fullTextResponse := dto.OpenAITextResponse{
