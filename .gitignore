@@ -25,3 +25,6 @@ electron/dist
 data/
 .cunzhi-memory
 .spec-workflow
+.gomodcache/
+.gocache-temp
+.gopath
