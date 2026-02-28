@@ -1180,6 +1180,22 @@ type ModelZaiCapabilities struct {
 
 var SUPPORTED_Z_MODELS = []ModelZaiConfig{
 	{
+		ID:         "glm-5",
+		Name:       "GLM-5",
+		UpstreamID: "glm-5",
+		Capabilities: ModelZaiCapabilities{
+			Vision:   false,
+			MCP:      true,
+			Thinking: true,
+		},
+		DefaultParams: map[string]interface{}{
+			"max_tokens":               32000,
+			"merge_assistant_messages": true,
+			"top_p":                    0.95,
+			"temperature":              1,
+		},
+	},
+	{
 		ID:         "glm-4.7",
 		Name:       "GLM-4.7",
 		UpstreamID: "glm-4.7",
@@ -1189,7 +1205,7 @@ var SUPPORTED_Z_MODELS = []ModelZaiConfig{
 			Thinking: true,
 		},
 		DefaultParams: map[string]interface{}{
-			"max_tokens":               80000,
+			"max_tokens":               40000,
 			"merge_assistant_messages": true,
 			"top_p":                    0.95,
 			"temperature":              1,
