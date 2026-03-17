@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/samber/lo"
 
 	"github.com/shopspring/decimal"
 
@@ -56,7 +57,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	}
 
 	// 如果不支持StreamOptions，将StreamOptions设置为nil
-	if !info.SupportStreamOptions || !request.Stream {
+	if !info.SupportStreamOptions || !lo.FromPtrOr(request.Stream, false) {
 		request.StreamOptions = nil
 	} else {
 		// 如果支持StreamOptions，且请求中没有设置StreamOptions，根据配置文件设置StreamOptions
@@ -178,9 +179,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 
-		if common.DebugEnabled {
-			logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
-		}
+		logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
 
 		requestBody = bytes.NewBuffer(jsonData)
 	}
@@ -195,16 +194,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		//notdiamond / zai
-		if info.ChannelType == constant.ChannelTypeOhMyGPT || info.ChannelType == constant.ChannelType360 {
-			if httpResp.StatusCode != http.StatusOK {
-				newZaiApiErr := types.NewError(fmt.Errorf("upstream_error"), types.ErrorCodeBadResponseStatusCode)
-				service.ResetStatusCode(newZaiApiErr, statusCodeMappingStr)
-				return newZaiApiErr
-			}
-		} else {
-			info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
-		}
+		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码

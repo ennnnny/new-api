@@ -2356,11 +2356,9 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	}
 	// 添加thinking内容（如果有）
 	if allZai.hasThinking && allZai.thinkingContent.Len() > 0 {
-		message.Thinking = &dto.ThinkingContent{
-			Content:   allZai.thinkingContent.String(),
-			Signature: fmt.Sprintf("%d", time.Now().Unix()),
-		}
-		message.ReasoningContent = allZai.thinkingContent.String()
+		thinkingContent := allZai.thinkingContent.String()
+		message.ReasoningContent = thinkingContent
+		message.Reasoning = thinkingContent
 	}
 
 	// 添加tool_calls（如果有）
