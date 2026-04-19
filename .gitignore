@@ -32,3 +32,5 @@ data/
 .gocache-temp
 .gopath
 .ace-tool/
+
+token_estimator_test.go
