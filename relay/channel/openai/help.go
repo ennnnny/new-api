@@ -602,12 +602,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
-	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, strings.Join(respArr, ""), info.UpstreamModelName, info.GetEstimatePromptTokens())
 
 	content, _ := json.Marshal(strings.Join(respArr, ""))
 	choice := dto.OpenAITextResponseChoice{
@@ -624,7 +619,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 		Object:  "chat.completion",
 		Created: createdTime,
 		Choices: []dto.OpenAITextResponseChoice{choice},
-		Usage:   usage,
+		Usage:   *usage,
 	}
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
@@ -639,7 +634,7 @@ func NotdiamondHandler(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
 
-	return nil, &usage
+	return nil, usage
 }
 
 func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
@@ -768,14 +763,9 @@ func NotdiamondStreamHandler(c *gin.Context, resp *http.Response, info *relaycom
 			Code:    "close_response_body_failed",
 		}, http.StatusInternalServerError), nil
 	}
-	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, strings.Join(respArr, ""), info.UpstreamModelName, info.GetEstimatePromptTokens())
 
-	return nil, &usage
+	return nil, usage
 }
 
 // GetMerlin Start
@@ -1041,14 +1031,9 @@ func GetMerlinStreamHandler(c *gin.Context, resp *http.Response, info *relaycomm
 			Code:    "unmarshal_response_body_failed",
 		}, http.StatusInternalServerError), nil
 	}
-	completionTokens := service.CountTextToken(allContent, info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, allContent, info.UpstreamModelName, info.GetEstimatePromptTokens())
 
-	return nil, &usage
+	return nil, usage
 }
 
 func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
@@ -1087,12 +1072,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	responseId := fmt.Sprintf("chatcmpl-%s", common.GetUUID())
 	createdTime := common.GetTimestamp()
-	completionTokens := service.CountTextToken(strings.Join(respArr, ""), info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, strings.Join(respArr, ""), info.UpstreamModelName, info.GetEstimatePromptTokens())
 
 	content, _ := json.Marshal(strings.Join(respArr, ""))
 	choice := dto.OpenAITextResponseChoice{
@@ -1109,7 +1089,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		Object:  "chat.completion",
 		Created: createdTime,
 		Choices: []dto.OpenAITextResponseChoice{choice},
-		Usage:   usage,
+		Usage:   *usage,
 	}
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {
@@ -1124,7 +1104,7 @@ func GetMerlinHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
 
-	return nil, &usage
+	return nil, usage
 }
 
 //GetMerlin End
@@ -2251,14 +2231,9 @@ func ZaiStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		return createCloseBodyError()
 	}
 
-	completionTokens := service.CountTextToken(allZai.allContent.String(), info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, allZai.allContent.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 
-	return nil, &usage
+	return nil, usage
 }
 
 func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
@@ -2410,12 +2385,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 		choice.FinishReason = "stop"
 	}
 
-	completionTokens := service.CountTextToken(allZai.allContent.String(), info.UpstreamModelName)
-	usage := dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: completionTokens,
-		TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-	}
+	usage := service.ResponseText2Usage(c, allZai.allContent.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 
 	fullTextResponse := dto.OpenAITextResponse{
 		Id:      responseId,
@@ -2423,7 +2393,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 		Created: createdTime,
 		Model:   info.UpstreamModelName,
 		Choices: []dto.OpenAITextResponseChoice{choice},
-		Usage:   usage,
+		Usage:   *usage,
 	}
 
 	jsonResponse, err := json.Marshal(fullTextResponse)
@@ -2440,7 +2410,7 @@ func ZaiHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, err = c.Writer.Write(jsonResponse)
 
-	return nil, &usage
+	return nil, usage
 }
 
 // 创建关闭响应错误的辅助函数
